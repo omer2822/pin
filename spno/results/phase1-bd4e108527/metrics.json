@@ -1,0 +1,150 @@
+{
+  "config": {
+    "grid_size": 64,
+    "dt": 0.01,
+    "substeps": 32,
+    "steps": 200,
+    "alpha_range": [
+      0.7,
+      1.1
+    ],
+    "beta_range": [
+      -0.4,
+      0.6
+    ],
+    "initial_bandwidth": 8,
+    "potential_amplitude_range": [
+      0.0,
+      0.5
+    ],
+    "potential_correlation_length": 1.0,
+    "mass_range": [
+      1.0,
+      3.0
+    ],
+    "n_train": 800,
+    "n_val": 100,
+    "n_test": 100,
+    "seed": 0
+  },
+  "splits": {
+    "train": {
+      "grid_size": 64,
+      "substeps": 32,
+      "steps": 200,
+      "potential_family": "random",
+      "initial_bandwidth": 8,
+      "seed": 0,
+      "mass_min": 1.0003141356491347,
+      "mass_max": 2.9997868952845965,
+      "mass_ratio": 2.998844851210607,
+      "alpha_min": 0.7007085548269132,
+      "alpha_max": 1.0989069710076618,
+      "alpha_max_gap": 0.003467378451534109,
+      "beta_min": -0.3988291748673487,
+      "beta_max": 0.5951917191547228,
+      "k_wrap": 16.899684380026944,
+      "cascade_steps": [
+        1,
+        50,
+        100,
+        200
+      ],
+      "cascade_above_k_train": [
+        8.348799321010523e-06,
+        0.0002868664705478963,
+        0.0003158089309651002,
+        0.00026682055267805775
+      ],
+      "cascade_above_k_wrap": [
+        2.3971315923500983e-06,
+        1.1931780569378513e-06,
+        1.1725684652244898e-06,
+        5.117841840464054e-07
+      ],
+      "n_trajectories": 800,
+      "n_frames": 201,
+      "realized_bandwidth": 8,
+      "n_pairs": 160000
+    },
+    "val": {
+      "grid_size": 64,
+      "substeps": 32,
+      "steps": 200,
+      "potential_family": "random",
+      "initial_bandwidth": 8,
+      "seed": 10000,
+      "mass_min": 1.001253736991253,
+      "mass_max": 2.987889053831086,
+      "mass_ratio": 2.984147717450355,
+      "alpha_min": 0.7032110633778395,
+      "alpha_max": 1.0981391700689938,
+      "alpha_max_gap": 0.024806286851419723,
+      "beta_min": -0.39091718350397076,
+      "beta_max": 0.5713079059855425,
+      "k_wrap": 16.899684380026944,
+      "cascade_steps": [
+        1,
+        50,
+        100,
+        200
+      ],
+      "cascade_above_k_train": [
+        2.8917675420161815e-06,
+        0.00026363606683513317,
+        0.00010887759564555059,
+        0.00014237205692359533
+      ],
+      "cascade_above_k_wrap": [
+        2.1072226260672326e-07,
+        8.849929358320735e-08,
+        1.1932265295990988e-07,
+        1.275596332321342e-07
+      ],
+      "n_trajectories": 100,
+      "n_frames": 201,
+      "realized_bandwidth": 8,
+      "n_pairs": 20000
+    },
+    "test": {
+      "grid_size": 64,
+      "substeps": 32,
+      "steps": 200,
+      "potential_family": "random",
+      "initial_bandwidth": 8,
+      "seed": 20000,
+      "mass_min": 1.0008848611010424,
+      "mass_max": 2.970570650361764,
+      "mass_ratio": 2.967944431784023,
+      "alpha_min": 0.7038046534396162,
+      "alpha_max": 1.0969332081389744,
+      "alpha_max_gap": 0.02185178128584475,
+      "beta_min": -0.39769690805374935,
+      "beta_max": 0.566213316131981,
+      "k_wrap": 16.899684380026944,
+      "cascade_steps": [
+        1,
+        50,
+        100,
+        200
+      ],
+      "cascade_above_k_train": [
+        3.914434345502925e-06,
+        0.00011894537604183354,
+        0.00011891235164988272,
+        0.00010125623643996339
+      ],
+      "cascade_above_k_wrap": [
+        2.3146082003378681e-07,
+        1.8738685008904772e-07,
+        1.6109387143215789e-07,
+        1.3050261229652753e-07
+      ],
+      "n_trajectories": 100,
+      "n_frames": 201,
+      "realized_bandwidth": 8,
+      "n_pairs": 20000
+    }
+  },
+  "config_hash": "bd4e108527"
+}

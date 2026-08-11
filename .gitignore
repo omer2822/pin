@@ -1,0 +1,28 @@
+# Environments
+venv./
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+
+# Tutorial-series artifacts (regenerable)
+pinn-neural-operators/data/
+pinn-neural-operators/figures/
+pinn-neural-operators/videos/
+01_pytorch_pinns_to_fno_physicsnemo.ipynb
+
+# Thesis artifacts: keep metrics and figures, drop bulk data and checkpoints
+spno/data/
+spno/results/**/*.pt
+spno/results/**/*.npz
