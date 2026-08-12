@@ -150,7 +150,20 @@ class KineticPhase(nn.Module):
             raise ValueError("mode must be one of K0, K1, K2")
         self.domain = domain
         self.mode = mode
-        k_squared = domain.wave_number_squared()
+        # Stored in the model's own dtype, not float64.  A float64 buffer on an
+        # otherwise-float32 module makes ``model.to("mps")`` raise -- MPS has no float64
+        # -- which silently barred the entire C family from the training device.
+        # ``forward`` casts up to the parameter dtype, and ``precision.widen_to_double``
+        # widens the buffer along with everything else, so float64 evaluation is
+        # unaffected.
+        #
+        # Built in float64 and *then* narrowed, never built natively at the target
+        # dtype.  Measured at N=64: `2*pi*fftfreq` evaluated in float64 carries 2.3e-13
+        # of absolute construction error and narrows to exactly the integers, whereas
+        # evaluating the same expression in float32 lands 1.2e-4 away from them -- which
+        # would survive widening and sit nine orders of magnitude above the 1e-13 bounds
+        # the structural tests assert.
+        k_squared = domain.wave_number_squared().to(torch.get_default_dtype())
         self.register_buffer("k_squared", k_squared)
         self.register_buffer("k_squared_scale", k_squared.max().clamp_min(1.0))
         feature_dim = 2 if mode == "K1" else 1

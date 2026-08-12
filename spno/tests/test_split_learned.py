@@ -429,3 +429,93 @@ def test_exact_split_step_keeps_a_sibling_compatible_state_dict():
     field, potential, alpha, beta = _inputs(domain)
     with torch.no_grad():
         _widen(exact)(field, potential, alpha, beta, DT)
+
+
+# --------------------------------------------------------------------------------
+# (8) Device transferability -- the training device is part of the architecture
+# --------------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="requires an MPS device"
+)
+@pytest.mark.parametrize("kind", ALL_SPLIT)
+def test_the_split_family_moves_to_mps(kind):
+    """MPS has no float64, so any float64 buffer bars the model from the GPU entirely.
+
+    This is not a performance nicety.  ``KineticPhase`` registered ``k_squared`` at
+    float64 (``wave_number_squared`` defaults to it) on an otherwise-float32 module, so
+    ``model.to("mps")`` raised ``TypeError`` and the whole C family could only be
+    trained on CPU -- roughly 6x slower.  The buffer now follows the model's dtype, and
+    ``widen_to_double`` still widens it for float64 evaluation.
+    """
+
+    domain = _domain()
+    torch.manual_seed(0)
+    model = kind(domain, trained_dt=DT)  # not widened: this is the training path
+    model.to("mps")
+    assert {str(b.dtype) for b in model.buffers()} <= {"torch.float32"}
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="requires an MPS device"
+)
+def test_the_fno_also_moves_to_mps():
+    """The paired positive: the test above is not passing because MPS accepts anything.
+
+    Model A always moved to MPS -- it has no float64 buffers -- so it establishes that
+    the assertion has teeth and that the C family was the outlier, not the rule.
+    """
+
+    domain = _domain()
+    torch.manual_seed(0)
+    FNOStepOperator(domain, modes=8, width=16, n_layers=2, trained_dt=DT).to("mps")
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="requires an MPS device"
+)
+def test_a_float64_buffer_is_what_breaks_the_move():
+    """The paired negative: re-registering the buffer at float64 restores the failure.
+
+    Without this, a later change that reintroduces a float64 buffer would make the
+    tests above pass vacuously only until someone looked.
+    """
+
+    domain = _domain()
+    torch.manual_seed(0)
+    model = DensityPhaseSplitStep(domain, trained_dt=DT)
+    model.kinetic.register_buffer("k_squared", model.kinetic.k_squared.double())
+    with pytest.raises(TypeError, match="float64"):
+        model.to("mps")
+
+
+def test_widening_recovers_float64_and_lands_on_exact_integers():
+    """Storing k^2 at float32 costs nothing in float64 evaluation -- it gains.
+
+    ``2*pi*fftfreq(n, d=2*pi/n)`` does not produce exact integers: measured at N=64 the
+    float64 construction is off by up to 2.3e-13 absolute (3.4e-16 relative), and
+    narrowing that to float32 lands on exactly the integers.  So the widened buffer is
+    if anything closer to the truth than the original.
+
+    The order matters, and getting it wrong is silent.  Evaluating the *same expression*
+    natively in float32 -- rather than in float64 and narrowing -- misses the integers
+    by 1.2e-4 in k^2, which survives widening and would sit nine orders of magnitude
+    above the 1e-13 bounds the tests above assert.  The exact-integer check below is
+    what separates the two constructions; a dtype check alone passes for both.
+    """
+
+    domain = _domain()
+    torch.manual_seed(0)
+    widened = _widen(DensityPhaseSplitStep(domain, trained_dt=DT))
+
+    k_squared = widened.kinetic.k_squared
+    assert k_squared.dtype == torch.float64
+    assert torch.equal(k_squared, torch.round(k_squared))
+    assert float(k_squared.max()) == (N // 2) ** 2
+
+    # The paired negative: the native-float32 construction fails this check, so the
+    # assertion above is discriminating rather than decorative.
+    native = domain.wave_number_squared(dtype=torch.float32).double()
+    assert not torch.equal(native, torch.round(native))
+    assert float((native - torch.round(native)).abs().max()) > 1e-5
