@@ -46,11 +46,14 @@ from spno.evaluation.reversibility import evaluate_reversibility
 from spno.evaluation.spectral import evaluate_spectral
 from spno.experiments import (
     arithmetic_mass_floor,
+    budget_warning,
+    converged,
     describe_config,
     evaluate_model,
     load_shards,
     pick_device,
     rollout_inputs,
+    run_identifier,
     save_run,
 )
 from spno.models.fno import FNOStepOperator
@@ -175,7 +178,7 @@ def run_seed(seed, shards, data_config, train_config, scale, kinetic, mode, loca
             model, shards, data_config, config, checkpoints=CHECKPOINTS
         )
         entry["history"] = history.as_dict()
-        entry["converged"] = history.best_epoch < len(history.val_loss) - 1
+        entry["converged"] = converged(history)
 
         widened = widen_to_double(model, device="cpu").eval()
         inputs = rollout_inputs(shards["test"], data_config, "cpu", n=64, dtype=torch.complex128)
@@ -346,7 +349,12 @@ def main() -> dict:
         "summary": summary,
         "per_seed": per_seed,
     }
-    identifier = f"{config_hash(data_config)}-{args.mode}-{args.kinetic}{args.local}"
+    identifier = run_identifier(
+        config_hash(data_config),
+        args.mode,
+        f"{args.kinetic}{args.local}",
+        quick=args.quick,
+    )
     output = save_run("phase45", identifier, payload)
     make_plots(summary, payload, output)
 
@@ -367,9 +375,9 @@ def main() -> dict:
             f"{entry['energy_classification'][0]:>9s} "
             f"{entry['reversibility_regime'][0]:>12s}"
         )
-    unconverged = [n for n, e in summary.items() if not all(e["converged"])]
-    if unconverged:
-        print(f"\nWARNING: budget bound for {unconverged} -- raise --epochs before reporting")
+    warning = budget_warning(summary)
+    if warning:
+        print(f"\n{warning}")
     print(f"\nwritten to: {output}")
     return payload
 

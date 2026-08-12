@@ -17,7 +17,7 @@ from .data.datasets import TrajectoryShard, shard_paths
 from .evaluation.rollout import evaluate_rollout
 from .precision import widen_to_double
 from .solvers.split_step import SplitStepNLSOperator, SubsteppedReference
-from .train import TrainConfig, evaluate_one_step
+from .train import TrainConfig, TrainHistory, evaluate_one_step
 from .data.datasets import OneStepBatches
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -161,6 +161,57 @@ def arithmetic_mass_floor(
         results[label] = {"mean": float(drift.mean()), "max": float(drift.max())}
     results["steps"] = steps
     return results
+
+
+def converged(history: TrainHistory) -> bool:
+    """True when the best epoch was not the last one -- i.e. early stopping fired.
+
+    A run whose ``best_val`` lands on the final epoch is *budget bound*: validation loss
+    was still falling when the epoch cap hit, so its numbers describe the budget rather
+    than the model.  Phases 2-3 shipped six such runs (``best_epoch == 24`` for all six
+    at a 25-epoch cap, val loss still dropping 26-50% over the last five epochs).
+
+    This is a necessary condition, not a sufficient one: it detects "the cap bound the
+    run", not "the model reached its floor".  A run that early-stops on a plateau it
+    would have escaped later still reads as converged.
+    """
+
+    return history.best_epoch < len(history.val_loss) - 1
+
+
+def budget_warning(summary: dict[str, dict]) -> str | None:
+    """The warning for any model with an unconverged seed, or None when all are clean.
+
+    A single budget-bound seed condemns the model's row: averaging it with converged
+    seeds would launder the cap into the reported mean.
+    """
+
+    unconverged = [
+        name for name, entry in summary.items() if not all(entry["converged"])
+    ]
+    if not unconverged:
+        return None
+    return f"WARNING: budget bound for {unconverged} -- raise --epochs before reporting"
+
+
+def run_identifier(base: str, *parts: str, quick: bool = False) -> str:
+    """Assemble a results-directory identifier from every knob that moves the numbers.
+
+    ``TrainConfig`` is not hashed -- ``describe_config`` records ``data_hash`` only --
+    so anything that changes the result and is *not* in the data config has to appear
+    here or two runs silently share a directory and the later one wins.
+
+    ``quick`` is such a knob, and the reason this helper exists: a ``--quick`` smoke run
+    is a handful of epochs on a truncated seed list, and it used to write to the same
+    directory as the real run.  Running the documented smoke test therefore destroyed
+    the Phases 2-3 metrics it was meant to leave alone.  Tagging the directory makes
+    that structurally impossible rather than a thing to remember.
+    """
+
+    pieces = [base, *(str(part) for part in parts if part)]
+    if quick:
+        pieces.append("quick")
+    return "-".join(pieces)
 
 
 def save_run(

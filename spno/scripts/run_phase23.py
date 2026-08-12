@@ -13,7 +13,12 @@ core can learn to rely on it.
 
 Usage::
 
-    python scripts/run_phase23.py [--quick] [--seeds 0 1 2] [--device auto]
+    python scripts/run_phase23.py [--quick] [--seeds 0 1 2] [--epochs 60] [--device auto]
+
+The original Phases 2-3 run used 25 epochs and ``best_epoch == 24`` for all six runs:
+early stopping never fired and validation loss was still falling.  Raise ``--epochs``
+until the budget-bound warning at the end of the run is gone, and use the same budget
+for ``run_phase45.py``, before any of these numbers reaches the thesis.
 """
 
 from __future__ import annotations
@@ -31,11 +36,14 @@ import torch
 
 from spno.config import DataConfig, config_hash
 from spno.experiments import (
+    budget_warning,
+    converged,
     describe_config,
     evaluate_model,
     arithmetic_mass_floor,
     load_shards,
     pick_device,
+    run_identifier,
     save_run,
 )
 from spno.models.fno import FNOStepOperator
@@ -73,6 +81,7 @@ def run_seed(
     results["A"] = {
         **evaluate_model(model_a, shards, data_config, config, checkpoints=CHECKPOINTS),
         "history": history_a.as_dict(),
+        "converged": converged(history_a),
     }
 
     print(f"--- seed {seed}: Model B-post (projection at evaluation only) ---")
@@ -83,6 +92,8 @@ def run_seed(
             model_b_post, shards, data_config, config, checkpoints=CHECKPOINTS
         ),
         "history": history_a.as_dict(),
+        # Shares A's history, so it necessarily shares A's convergence status.
+        "converged": converged(history_a),
         "note": "shares Model A's weights; projection applied only at evaluation",
     }
 
@@ -96,6 +107,7 @@ def run_seed(
             model_b_loop, shards, data_config, config, checkpoints=CHECKPOINTS
         ),
         "history": history_b.as_dict(),
+        "converged": converged(history_b),
     }
     return results
 
@@ -131,6 +143,7 @@ def aggregate(per_seed: dict[int, dict]) -> dict:
         entry["diverged_at"] = [
             per_seed[s][name]["rollout"]["diverged_at"] for s in per_seed
         ]
+        entry["converged"] = [per_seed[s][name]["converged"] for s in per_seed]
         summary[name] = entry
     return summary
 
@@ -186,13 +199,20 @@ def main() -> dict:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=60,
+        help="raise until the budget-bound warning disappears; Phases 2-3 were "
+        "originally run at 25, where early stopping never fired",
+    )
     parser.add_argument("--device", default="auto")
     args = parser.parse_args()
 
     data_config = DataConfig()
     device = pick_device(args.device)
     train_config = TrainConfig(
-        epochs=3 if args.quick else 25,
+        epochs=3 if args.quick else args.epochs,
         batch_size=256,
         learning_rate=1e-3,
         patience=6,
@@ -218,7 +238,7 @@ def main() -> dict:
         "summary": summary,
         "per_seed": per_seed,
     }
-    identifier = config_hash(data_config)
+    identifier = run_identifier(config_hash(data_config), quick=args.quick)
     output = save_run("phase23", identifier, payload)
     make_plots(per_seed, summary, payload, output)
 
@@ -241,6 +261,9 @@ def main() -> dict:
             f"{roll['100']['mass_drift_mean']:10.3e} "
             f"{roll['100']['energy_drift_mean']:11.3e}"
         )
+    warning = budget_warning(summary)
+    if warning:
+        print(f"\n{warning}")
     print(f"\nwritten to: {output}")
     return payload
 

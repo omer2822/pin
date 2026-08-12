@@ -26,3 +26,6 @@ pinn-neural-operators/videos/
 spno/data/
 spno/results/**/*.pt
 spno/results/**/*.npz
+
+# Smoke-run output: --quick is a few epochs on one seed, so its numbers are noise
+spno/results/*-quick/
