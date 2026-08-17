@@ -14,6 +14,8 @@ import torch
 
 from spno.config import DataConfig
 from spno.data.datasets import (
+    MultiDtBatches,
+    OneStepBatches,
     OneStepDataset,
     RolloutDataset,
     as_channels,
@@ -231,3 +233,72 @@ def test_trajectories_conserve_mass_along_the_stored_frames(shards):
 
     drift = torch.abs(masses / masses[:, :1] - 1)
     assert float(drift.max()) < 1e-13
+
+
+# ---------------------------------------------------------------------------
+# Task 8: multi-dt supervision (G6a)
+# ---------------------------------------------------------------------------
+
+
+def test_multi_dt_batches_carry_their_own_dt_and_cover_every_shard():
+    small = dataclasses.replace(SMALL, n_train=8, steps=3)
+    shards = {
+        dt: generate_shard(dataclasses.replace(small, dt=dt), "train")
+        for dt in (0.005, 0.01, 0.02)
+    }
+    batches = MultiDtBatches(shards, device="cpu")
+    generator = torch.Generator().manual_seed(0)
+    assert {batch["dt"] for batch in batches.batches(4, generator)} == {
+        0.005,
+        0.01,
+        0.02,
+    }
+
+
+def test_multi_dt_batches_yield_every_pair_exactly_once_per_epoch():
+    """A schedule bug that dropped or duplicated a sub-shard would silently reweight
+    the dt distribution, and the G6a result would be about sampling, not architecture."""
+
+    small = dataclasses.replace(SMALL, n_train=8, steps=3)
+    shards = {
+        dt: generate_shard(dataclasses.replace(small, dt=dt), "train")
+        for dt in (0.005, 0.01, 0.02)
+    }
+    batches = MultiDtBatches(shards, device="cpu")
+    generator = torch.Generator().manual_seed(0)
+    seen = {dt: 0 for dt in shards}
+    for batch in batches.batches(4, generator):
+        seen[batch["dt"]] += batch["psi"].shape[0]
+    assert seen == {dt: len(OneStepBatches(s, device="cpu")) for dt, s in shards.items()}
+    assert len(batches) == sum(seen.values())
+
+
+def test_every_multi_dt_batch_is_single_dt():
+    """Each batch stays single-dt, which is why no model change is needed: the step
+    signature still takes one scalar dt."""
+
+    small = dataclasses.replace(SMALL, n_train=8, steps=3)
+    shards = {
+        dt: generate_shard(dataclasses.replace(small, dt=dt), "train")
+        for dt in (0.005, 0.02)
+    }
+    generator = torch.Generator().manual_seed(0)
+    for batch in MultiDtBatches(shards, device="cpu").batches(4, generator):
+        assert isinstance(batch["dt"], float)
+
+
+def test_multi_dt_batches_are_deterministic_in_the_generator():
+    small = dataclasses.replace(SMALL, n_train=8, steps=3)
+    shards = {
+        dt: generate_shard(dataclasses.replace(small, dt=dt), "train")
+        for dt in (0.005, 0.01)
+    }
+    batches = MultiDtBatches(shards, device="cpu")
+    first = [b["dt"] for b in batches.batches(4, torch.Generator().manual_seed(7))]
+    second = [b["dt"] for b in batches.batches(4, torch.Generator().manual_seed(7))]
+    assert first == second
+
+
+def test_multi_dt_batches_reject_an_empty_mapping():
+    with pytest.raises(ValueError, match="at least one"):
+        MultiDtBatches({}, device="cpu")

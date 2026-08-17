@@ -15,7 +15,12 @@ import time
 import torch
 
 from .config import DataConfig
-from .data.datasets import OneStepBatches, RolloutBatches, TrajectoryShard
+from .data.datasets import (
+    MultiDtBatches,
+    OneStepBatches,
+    RolloutBatches,
+    TrajectoryShard,
+)
 from .domain import PeriodicDomain, l2_mass
 from .losses.relative_l2 import relative_l2_loss
 from .seeding import seed_everything
@@ -88,8 +93,16 @@ def _rollout_loss(model, batch, domain, dt, horizon: int) -> Tensor:
 
 
 def _one_step_loss(model, batch, domain, dt) -> Tensor:
+    """Relative-L2 on one step, at the batch's own step size when it carries one.
+
+    ``batch.get("dt", dt)`` is backward compatible by construction: neither
+    ``OneStepBatches`` nor ``RolloutBatches`` emits a ``"dt"`` key (verified), so every
+    existing caller keeps using the config's ``dt``.  Only ``MultiDtBatches`` sets it.
+    """
+
+    step = float(batch.get("dt", dt))
     prediction = model(
-        batch["psi"], batch["potential"], batch["alpha"], batch["beta"], dt
+        batch["psi"], batch["potential"], batch["alpha"], batch["beta"], step
     )
     return relative_l2_loss(prediction, batch["target"], domain)
 
@@ -254,6 +267,109 @@ def train_rollout(
         if verbose and (epoch % config.log_every == 0 or epoch == config.epochs - 1):
             print(
                 f"  epoch {epoch:3d}  rollout {train_loss:.4e}  val(1-step) {val_loss:.4e}"
+                + ("  *" if history.best_epoch == epoch else "")
+            )
+
+        if epoch - history.best_epoch >= config.patience:
+            if verbose:
+                print(f"  early stop at epoch {epoch} (patience {config.patience})")
+            break
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+    history.seconds = time.time() - started
+    return history
+
+
+def train_multi_dt(
+    model,
+    train_batches: MultiDtBatches,
+    val_batches: OneStepBatches,
+    data_config: DataConfig,
+    config: TrainConfig,
+    *,
+    verbose: bool = True,
+) -> TrainHistory:
+    """One-step training over several ``dt`` at once: the G6a arm.
+
+    Takes pre-built batches rather than shards, because the caller owns the mapping from
+    ``dt`` to shard and that mapping is part of the arm's identity.  Optimizer, schedule,
+    early stopping and budget are identical to :func:`train_one_step` so the two remain
+    comparable.
+
+    Validation is still one-step at the config's ``dt``, so the reported scale matches
+    every other arm's.
+
+    **Read the result as a statement about the hypothesis class.**  The FNO ignores its
+    ``dt`` argument entirely, so it cannot represent dt-dependence no matter how it is
+    optimized; a flat multi-dt result for Model A is the architecture speaking, not the
+    optimizer.  Only the split-step family, where ``dt`` multiplies a learned rate, can
+    use this supervision.
+
+    **The model must be built with ``trained_dt=None``.**  ``StepOperator._check_dt``
+    refuses any ``dt`` other than ``trained_dt``, which is exactly the guard that makes
+    the G6b transfer measurement meaningful -- so it also, correctly, blocks multi-dt
+    *training* on a model that claims a single trained ``dt``.  A model supervised
+    across several step sizes has no single one, and ``trained_dt=None`` is the honest
+    declaration of that.  Do **not** work around this with
+    :func:`~spno.models.base.allow_dt_transfer`: that context manager licenses
+    *evaluation* outside the trained ``dt``, and using it here would erase the
+    distinction G6a and G6b exist to separate.
+    """
+
+    if getattr(model, "trained_dt", None) is not None:
+        raise RuntimeError(
+            f"{type(model).__name__} declares trained_dt={model.trained_dt}, but "
+            "multi-dt supervision trains across several step sizes and no single one "
+            "is correct. Construct the model with trained_dt=None for the G6a arm. "
+            "Do not use allow_dt_transfer here -- that licenses evaluation outside the "
+            "trained dt and would conflate G6a with G6b."
+        )
+
+    domain = data_config.domain
+    dt = data_config.dt
+    generator = seed_everything(config.seed)
+    model.to(config.device)
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
+    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(config.epochs, 1)
+    )
+
+    history = TrainHistory()
+    best_state = None
+    started = time.time()
+
+    for epoch in range(config.epochs):
+        model.train()
+        running, seen = 0.0, 0
+        for batch in train_batches.batches(config.batch_size, generator):
+            optimizer.zero_grad()
+            loss = _one_step_loss(model, batch, domain, dt)
+            loss.backward()
+            if config.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
+            optimizer.step()
+            weight = batch["psi"].shape[0]
+            running += float(loss.detach()) * weight
+            seen += weight
+        scheduler.step()
+
+        train_loss = running / max(seen, 1)
+        val_loss = evaluate_one_step(model, val_batches, domain, dt, config)
+        history.train_loss.append(train_loss)
+        history.val_loss.append(val_loss)
+
+        if val_loss < history.best_val:
+            history.best_val = val_loss
+            history.best_epoch = epoch
+            best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+
+        if verbose and (epoch % config.log_every == 0 or epoch == config.epochs - 1):
+            print(
+                f"  epoch {epoch:3d}  multi-dt {train_loss:.4e}  val(1-step) {val_loss:.4e}"
                 + ("  *" if history.best_epoch == epoch else "")
             )
 

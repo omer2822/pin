@@ -420,3 +420,68 @@ class OneStepBatches:
                 "alpha": self.alpha[trajectory],
                 "beta": self.beta[trajectory],
             }
+
+
+class MultiDtBatches:
+    """One-step pairs drawn from several shards, each generated at its own ``dt``.
+
+    The G6a arm: multi-dt supervision as "a second route past ``k_wrap``".  At fixed
+    ``alpha`` the one-step multiplier determines ``omega`` only modulo ``2 pi / dt``,
+    so observing the *same* physical mode at several ``dt`` breaks the degeneracy the
+    same way varying ``alpha`` does.
+
+    Every batch stays **single-dt** and carries its step size as ``batch["dt"]``.  That
+    is what keeps the model interface unchanged: ``step`` still takes one scalar ``dt``,
+    and no architecture has to learn a batched step size.
+
+    *Architectural note, not an optimization detail.*  The FNO ignores its ``dt``
+    argument entirely (``fno.py`` never reads it), so it cannot represent the
+    dependence this arm supervises.  Its G6a result is therefore a statement about the
+    hypothesis class, not about optimization -- report it that way.
+    """
+
+    def __init__(
+        self,
+        shards: dict[float, TrajectoryShard],
+        *,
+        device: str = "cpu",
+        dtype: torch.dtype = torch.complex64,
+    ) -> None:
+        if not shards:
+            raise ValueError("MultiDtBatches needs at least one (dt, shard) pair")
+        self.device = device
+        self.views = {
+            float(dt): OneStepBatches(shard, device=device, dtype=dtype)
+            for dt, shard in shards.items()
+        }
+
+    def __len__(self) -> int:
+        return sum(len(view) for view in self.views.values())
+
+    def batches(
+        self, batch_size: int, generator: torch.Generator, *, shuffle: bool = True
+    ) -> Iterator[dict[str, Tensor]]:
+        """Interleave the per-dt streams in a generator-determined order.
+
+        The schedule is permuted rather than the pooled pairs, so each yielded batch
+        stays single-dt while the *order* of dt values is still randomized.  Every pair
+        appears exactly once per epoch: a schedule that dropped or repeated a sub-shard
+        would silently reweight the dt distribution, and the G6a result would then be
+        about sampling rather than architecture.
+        """
+
+        iterators = {
+            dt: view.batches(batch_size, generator, shuffle=shuffle)
+            for dt, view in self.views.items()
+        }
+        schedule: list[float] = []
+        for dt, view in self.views.items():
+            count = len(view)
+            schedule.extend([dt] * ((count + batch_size - 1) // batch_size))
+        if shuffle:
+            order = torch.randperm(len(schedule), generator=generator).tolist()
+            schedule = [schedule[index] for index in order]
+        for dt in schedule:
+            batch = next(iterators[dt])
+            batch["dt"] = dt
+            yield batch

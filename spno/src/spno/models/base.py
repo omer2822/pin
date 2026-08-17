@@ -14,6 +14,7 @@ wrong answer when Phase 6 asks it to extrapolate in time.
 from __future__ import annotations
 
 import abc
+import contextlib
 
 import torch
 import torch.nn as nn
@@ -82,3 +83,36 @@ class StepOperator(nn.Module, abc.ABC):
 
     def parameter_count(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
+@contextlib.contextmanager
+def allow_dt_transfer(model: "StepOperator"):
+    """Temporarily license evaluation at a ``dt`` the model was not trained at.
+
+    An explicit, scoped opt-in rather than a permanent flag, because the refusal in
+    :meth:`StepOperator._check_dt` is a *feature*: the learned rates absorb the O(dt^2)
+    splitting correction and are therefore dt-specific.  Measuring transfer is
+    legitimate; doing it by flipping a flag that then stays flipped for the rest of the
+    process is not.  Mirrors how ``reversibility_order`` overrides ``trained_dt``.
+
+    ``supports_dt_transfer`` is declared as a **class** attribute, so assigning to the
+    instance shadows it.  The restore therefore deletes the instance attribute when
+    there was not one to begin with, rather than writing the class value onto the
+    instance -- otherwise every model that passed through this manager would carry a
+    lingering instance attribute no longer bound to the class default.
+
+    G6b is meaningful only for the split-step family, where ``dt`` multiplies a learned
+    rate.  An FNO ignores its ``dt`` argument entirely, so a transfer number measured on
+    one is an artefact, not a result.
+    """
+
+    had_instance_attribute = "supports_dt_transfer" in vars(model)
+    original = model.supports_dt_transfer
+    model.supports_dt_transfer = True
+    try:
+        yield model
+    finally:
+        if had_instance_attribute:
+            model.supports_dt_transfer = original
+        else:
+            del model.supports_dt_transfer

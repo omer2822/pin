@@ -14,8 +14,11 @@ from spno.config import DataConfig
 from spno.data.datasets import OneStepBatches, generate_shard
 from spno.domain import PeriodicDomain, l2_mass
 from spno.losses.relative_l2 import relative_l2_loss
+from spno.models.base import allow_dt_transfer
 from spno.models.fno import FNOStepOperator
 from spno.models.projected import MassProjectedOperator, mass_drift
+from spno.models.split_learned import DensityPhaseSplitStep
+from spno.precision import widen_to_double
 from spno.solvers.split_step import SplitStepNLSOperator
 from spno.train import TrainConfig, train_one_step
 
@@ -325,3 +328,162 @@ def test_stock_to_float64_would_destroy_the_spectral_weights():
         broken = model.to(torch.float64)
 
     assert "torch.complex128" not in {str(p.dtype) for p in broken.parameters()}
+
+
+# ---------------------------------------------------------------------------
+# Task 8: dt transfer is an explicit, scoped opt-in (G6b)
+# ---------------------------------------------------------------------------
+
+
+def _double_inputs(batch=2, n=32):
+    field = torch.randn(batch, n, dtype=torch.complex128)
+    potential = torch.zeros(batch, n, dtype=torch.float64)
+    alpha = torch.full((batch,), 0.9, dtype=torch.float64)
+    beta = torch.full((batch,), 0.3, dtype=torch.float64)
+    return field, potential, alpha, beta
+
+
+def test_dt_transfer_is_refused_by_default_for_every_model():
+    domain = PeriodicDomain.periodic_1d(32)
+    for model in (
+        FNOStepOperator(domain, modes=4, width=8, n_layers=1, trained_dt=0.01),
+        DensityPhaseSplitStep(domain, trained_dt=0.01),
+    ):
+        assert model.supports_dt_transfer is False
+
+
+def test_allow_dt_transfer_is_scoped_and_restores_the_refusal():
+    domain = PeriodicDomain.periodic_1d(32)
+    torch.manual_seed(0)
+    model = widen_to_double(DensityPhaseSplitStep(domain, trained_dt=0.01))
+    field, potential, alpha, beta = _double_inputs()
+
+    with pytest.raises(ValueError, match="does not support dt transfer"):
+        model(field, potential, alpha, beta, 0.02)
+    with allow_dt_transfer(model):
+        assert model(field, potential, alpha, beta, 0.02).shape == field.shape
+    with pytest.raises(ValueError, match="does not support dt transfer"):
+        model(field, potential, alpha, beta, 0.02)
+
+
+def test_allow_dt_transfer_restores_the_flag_after_an_exception():
+    """The paired negative: a leak would license every later dt-transfer measurement."""
+
+    domain = PeriodicDomain.periodic_1d(32)
+    model = DensityPhaseSplitStep(domain, trained_dt=0.01)
+    with pytest.raises(RuntimeError):
+        with allow_dt_transfer(model):
+            raise RuntimeError("boom")
+    assert model.supports_dt_transfer is False
+
+
+def test_allow_dt_transfer_leaves_no_instance_attribute_behind():
+    """``supports_dt_transfer`` is a CLASS attribute.  Assigning on the instance shadows
+    it, so a naive restore would leave a lingering instance attribute that reads
+    correctly but is no longer bound to the class default."""
+
+    domain = PeriodicDomain.periodic_1d(32)
+    model = DensityPhaseSplitStep(domain, trained_dt=0.01)
+    assert "supports_dt_transfer" not in vars(model)
+    with allow_dt_transfer(model):
+        pass
+    assert "supports_dt_transfer" not in vars(model)
+
+
+def test_the_fno_returns_the_same_map_at_every_dt_so_transfer_is_meaningless():
+    """Not a bug -- a property of the class, and the reason G6b is C-family only."""
+
+    domain = PeriodicDomain.periodic_1d(32)
+    torch.manual_seed(0)
+    model = widen_to_double(
+        FNOStepOperator(domain, modes=4, width=8, n_layers=1, trained_dt=0.01)
+    )
+    field, potential, alpha, beta = _double_inputs()
+    with allow_dt_transfer(model), torch.no_grad():
+        assert torch.equal(
+            model(field, potential, alpha, beta, 0.01),
+            model(field, potential, alpha, beta, 0.02),
+        )
+
+
+def test_the_split_family_does_depend_on_dt():
+    """The paired positive: C1's map genuinely moves with dt, which is what makes a
+    transfer measurement meaningful for it and vacuous for the FNO."""
+
+    domain = PeriodicDomain.periodic_1d(32)
+    torch.manual_seed(0)
+    model = widen_to_double(DensityPhaseSplitStep(domain, trained_dt=0.01))
+    field, potential, alpha, beta = _double_inputs()
+    with allow_dt_transfer(model), torch.no_grad():
+        near = model(field, potential, alpha, beta, 0.01)
+        far = model(field, potential, alpha, beta, 0.02)
+    assert float(torch.abs(near - far).max()) > 1e-6
+
+
+def test_train_multi_dt_runs_and_reports_one_step_validation():
+    """train_multi_dt is otherwise untested code on the G6a path.  Tiny budget: this
+    checks the plumbing (batches carry dt, history is populated, the model survives),
+    not the physics."""
+
+    import dataclasses
+
+    from spno.data.datasets import MultiDtBatches
+    from spno.train import train_multi_dt
+
+    domain = PeriodicDomain.periodic_1d(32)
+    small = dataclasses.replace(SMALL, grid_size=32, n_train=8, n_val=4, steps=3)
+    shards = {
+        dt: generate_shard(dataclasses.replace(small, dt=dt), "train")
+        for dt in (0.005, 0.01)
+    }
+    train_batches = MultiDtBatches(shards, device="cpu")
+    val_batches = OneStepBatches(generate_shard(small, "val"), device="cpu")
+    config = dataclasses.replace(
+        TrainConfig(), epochs=2, batch_size=4, device="cpu", log_every=100
+    )
+
+    torch.manual_seed(0)
+    model = FNOStepOperator(domain, modes=4, width=8, n_layers=1, trained_dt=None)
+    history = train_multi_dt(
+        model, train_batches, val_batches, small, config, verbose=False
+    )
+
+    assert len(history.train_loss) == 2
+    assert len(history.val_loss) == 2
+    assert history.best_epoch >= 0
+    assert all(loss == loss for loss in history.val_loss), "no NaN"
+
+
+def test_multi_dt_training_refuses_a_model_that_claims_a_single_trained_dt():
+    """The gate, and the reason it exists.
+
+    ``_check_dt`` refuses any dt other than ``trained_dt`` -- the same guard that makes
+    the G6b transfer measurement meaningful.  It therefore also blocks multi-dt
+    *training* on a model claiming one dt, and it should: such a model would either
+    crash mid-epoch or, if silenced with allow_dt_transfer, quietly conflate G6a with
+    G6b.  Failing loudly up front is the correct behaviour.
+    """
+
+    import dataclasses
+
+    from spno.data.datasets import MultiDtBatches
+    from spno.train import train_multi_dt
+
+    domain = PeriodicDomain.periodic_1d(32)
+    small = dataclasses.replace(SMALL, grid_size=32, n_train=8, n_val=4, steps=3)
+    shards = {
+        dt: generate_shard(dataclasses.replace(small, dt=dt), "train")
+        for dt in (0.005, 0.01)
+    }
+    config = dataclasses.replace(TrainConfig(), epochs=1, batch_size=4, device="cpu")
+    model = FNOStepOperator(domain, modes=4, width=8, n_layers=1, trained_dt=small.dt)
+
+    with pytest.raises(RuntimeError, match="trained_dt=None"):
+        train_multi_dt(
+            model,
+            MultiDtBatches(shards, device="cpu"),
+            OneStepBatches(generate_shard(small, "val"), device="cpu"),
+            small,
+            config,
+            verbose=False,
+        )
