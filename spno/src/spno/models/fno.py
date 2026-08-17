@@ -49,6 +49,23 @@ class SpectralConv1d(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         batch, _, n = x.shape
         transformed = torch.fft.rfft(x)
+        # Guard borrowed from ``pinn-neural-operators/06_fno_core.py`` (:110, :187).
+        # Global Constraint 1 documents two silent failure modes this converts into
+        # exceptions: ``.to(torch.float64)`` casts the complex spectral weights to
+        # *real*, destroying the operator with only a warning, and feeding a float32
+        # field to a widened model would otherwise promote instead of complaining.
+        if not self.weight.is_complex():
+            raise ValueError(
+                f"{type(self).__name__} weights are {self.weight.dtype}, not complex. "
+                "They were cast to real -- almost certainly by .to(torch.float64), "
+                "which destroys the operator. Use precision.widen_to_double."
+            )
+        if transformed.dtype != self.weight.dtype:
+            raise ValueError(
+                f"input transforms to {transformed.dtype} but the spectral weights are "
+                f"{self.weight.dtype}; this would silently promote. Widen the model "
+                "with precision.widen_to_double, or pass a matching field dtype."
+            )
         retained = min(self.modes, n // 2 + 1)
         # Derive the buffer dtype from the weight rather than hardcoding cfloat, so
         # ``model.double()`` works.  Invariant measurements are run in float64 to

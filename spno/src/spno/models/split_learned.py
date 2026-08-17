@@ -173,6 +173,43 @@ class KineticPhase(nn.Module):
             nn.init.zeros_(self.network.network[-1].weight)
             nn.init.zeros_(self.network.network[-1].bias)
 
+    def rebind_domain(self, domain: PeriodicDomain) -> None:
+        """Move to a new grid, **keeping the training grid's normalizer**.
+
+        The network consumes ``k^2 / k^2_max``.  Recomputing ``k_squared_scale`` on the
+        new grid would send the same physical ``k`` to a different network input --
+        1024 at N=64, 4096 at N=128 -- silently changing ``kappa`` everywhere without
+        touching a weight.  Freezing the scale makes ``kappa`` a genuine function of
+        physical ``k^2``.
+
+        *The honest cost, reported rather than hidden.*  Modes above the training
+        grid's Nyquist then enter at ``k^2 / k^2_max > 1``, outside the range the MLP
+        ever saw.  :func:`~spno.evaluation.resolution.grid_dependence` says so, and it
+        is why "new high-k" is G4 in disguise rather than a resolution-transfer result.
+
+        **The buffer must retrace ``__init__``'s dtype path, not shortcut to float64.**
+        ``2*pi*fftfreq`` evaluated in float64 sits ~9.1e-13 from the exact integers at
+        N=128; narrowing to float32 snaps it onto them (every ``k^2 <= 4096`` is exactly
+        representable, well under float32's 2^24 integer limit), and widening again
+        keeps them exact.  Rebuilding straight into a float64 buffer would therefore
+        leave a rebound model carrying 9.1e-13 of construction error that a
+        freshly-constructed one does not have -- above the 1e-13 bounds the structural
+        tests assert.  Going via the default dtype makes ``rebind_domain(model, grid)``
+        bitwise equal to constructing at ``grid`` and widening.
+
+        Narrowed to the *existing* buffer's dtype at the end, so a float32 module never
+        acquires a float64 buffer (Global Constraint 3: MPS has no float64).
+        """
+
+        self.domain = domain
+        self.register_buffer(
+            "k_squared",
+            domain.wave_number_squared()
+            .to(torch.get_default_dtype())
+            .to(self.k_squared.dtype),
+        )
+        # k_squared_scale is deliberately NOT recomputed.
+
     def forward(self, parameters: Tensor) -> Tensor:
         """``parameters``: ``(batch, parameter_dim)`` with alpha first -> ``(batch, n)``."""
 
