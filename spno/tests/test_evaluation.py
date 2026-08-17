@@ -14,6 +14,7 @@ import torch
 
 from spno.config import DataConfig
 from spno.data.datasets import RolloutBatches, generate_shard
+from spno.data.generate import sample_initial_conditions
 from spno.domain import PeriodicDomain
 from spno.equations.nls import plane_wave
 from spno.evaluation.conservation import classify_drift, evaluate_conservation
@@ -25,7 +26,10 @@ from spno.evaluation.reversibility import (
 from spno.evaluation.rollout import evaluate_rollout
 from spno.evaluation.spectral import (
     amplitude_and_phase_split,
+    band_ratio,
     banded_error,
+    cascade_series,
+    energy_spectrum,
     evaluate_spectral,
     mean_phase_error,
     mode_error_spectrum,
@@ -355,3 +359,113 @@ def test_rollout_batches_windows_are_consecutive_and_in_trajectory(shard):
 def test_rollout_batches_reject_an_oversized_horizon(shard):
     with pytest.raises(ValueError):
         RolloutBatches(shard, horizon=shard.n_frames, device="cpu")
+
+
+# ---------------------------------------------------------------------------
+# Task 6: energy_spectrum coverage, band_ratio (G7), cascade_series (G9)
+# ---------------------------------------------------------------------------
+
+
+def test_energy_spectrum_satisfies_discrete_parseval():
+    """norm='backward': sum_k |psi_hat(k)|^2 == N * sum_x |psi(x)|^2."""
+
+    domain = PeriodicDomain.periodic_1d(64)
+    torch.manual_seed(0)
+    field = torch.randn(3, 64, dtype=torch.complex128)
+    spectrum = energy_spectrum(field, domain)
+    physical = (torch.abs(field) ** 2).sum(dim=-1).mean()
+    assert float(spectrum.sum()) == pytest.approx(64 * float(physical), rel=1e-12)
+
+
+def test_energy_spectrum_of_a_plane_wave_is_a_single_mode():
+    domain = PeriodicDomain.periodic_1d(64)
+    field = plane_wave(domain, (5,), amplitude=0.7).unsqueeze(0)
+    spectrum = energy_spectrum(field, domain)
+    assert float(spectrum[5]) == pytest.approx((64 * 0.7) ** 2, rel=1e-12)
+    others = torch.cat((spectrum[:5], spectrum[6:]))
+    assert float(others.max()) < 1e-18 * float(spectrum[5])
+
+
+def test_band_ratio_is_one_when_the_error_is_spectrally_flat():
+    domain = PeriodicDomain.periodic_1d(64)
+    torch.manual_seed(0)
+    target = torch.randn(4, 64, dtype=torch.complex128)
+    prediction = target * 1.01  # uniform relative perturbation in every mode
+    assert band_ratio(
+        prediction, target, domain, low_edge=8.0, high_edge=8.0
+    ) == pytest.approx(1.0, rel=1e-9)
+
+
+def test_band_ratio_exceeds_one_when_the_error_concentrates_above_the_edge():
+    domain = PeriodicDomain.periodic_1d(64)
+    torch.manual_seed(0)
+    target = torch.randn(4, 64, dtype=torch.complex128)
+    hat = torch.fft.fftn(target, dim=domain.spatial_axes)
+    magnitude = torch.sqrt(domain.wave_number_squared())
+    hat = hat * torch.where(magnitude >= 8.0, 1.5, 1.0)
+    prediction = torch.fft.ifftn(hat, dim=domain.spatial_axes)
+    assert band_ratio(prediction, target, domain, low_edge=8.0, high_edge=8.0) > 10.0
+
+
+def test_cascade_series_shows_growth_in_initially_empty_modes():
+    """The reference solver must cascade, or G9 has no signal to compare against."""
+
+    domain = PeriodicDomain.periodic_1d(64)
+    generator = torch.Generator().manual_seed(0)
+    initial = sample_initial_conditions(domain, 4, 8, (1.0, 3.0), generator)
+    potential = torch.zeros_like(initial.real)
+    alpha = torch.full((4,), 0.9, dtype=torch.float64)
+    beta = torch.full((4,), 0.6, dtype=torch.float64)
+    series = cascade_series(
+        SubsteppedReference(domain, 32),
+        domain,
+        initial,
+        potential,
+        alpha,
+        beta,
+        0.01,
+        steps=100,
+        stride=25,
+        cutoff=8.0,
+    )
+    assert series["fraction_above_cutoff"][0] < series["fraction_above_cutoff"][-1]
+    assert len(series["steps"]) == len(series["spectra"])
+
+
+def test_cascade_series_survives_a_diverging_model():
+    """The branch that fires exactly when a Phase 9 model blows up.
+
+    An unstable model is a result to record, not an exception to raise: the frames
+    captured before divergence are still the comparison the plot needs.  Asserting the
+    payload stays well-formed is what keeps a diverged arm from corrupting metrics.json.
+    """
+
+    domain = PeriodicDomain.periodic_1d(64)
+    generator = torch.Generator().manual_seed(0)
+    initial = sample_initial_conditions(domain, 2, 8, (1.0, 3.0), generator)
+    potential = torch.zeros_like(initial.real)
+    alpha = torch.full((2,), 0.9, dtype=torch.float64)
+    beta = torch.full((2,), 0.6, dtype=torch.float64)
+
+    class Diverging:
+        """Amplifies hard every step, so float64 overflows to inf well before step 200."""
+
+        def __call__(self, field, potential, alpha, beta, dt):
+            return field * 1e30
+
+    series = cascade_series(
+        Diverging(),
+        domain,
+        initial,
+        potential,
+        alpha,
+        beta,
+        0.01,
+        steps=200,
+        stride=25,
+        cutoff=8.0,
+    )
+    assert len(series["steps"]) == len(series["spectra"])
+    assert len(series["steps"]) == len(series["fraction_above_cutoff"])
+    assert len(series["steps"]) >= 1, "frame 0 is always recorded"
+    assert all(math.isfinite(v) for v in series["fraction_above_cutoff"])

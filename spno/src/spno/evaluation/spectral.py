@@ -150,6 +150,87 @@ def energy_spectrum(field: Tensor, domain: PeriodicDomain) -> Tensor:
     ).mean(dim=0)
 
 
+def band_ratio(
+    prediction: Tensor,
+    target: Tensor,
+    domain: PeriodicDomain,
+    *,
+    low_edge: float,
+    high_edge: float,
+) -> float:
+    """Relative error above ``high_edge`` divided by relative error below ``low_edge``.
+
+    The G7 normalization.  Fixing alpha makes the one-step task easier at *every*
+    wavenumber, so absolute ``E(k)`` falls across the board and an absolute comparison
+    cannot separate the three causes of high-k failure: (a) hard mode truncation beyond
+    ``n_modes``, (b) the oscillatory dependence of ``exp(-i alpha k^2 dt)`` on alpha,
+    which an FNO must route through a pointwise lift, and (c) no training energy above
+    ``k_train``.  Only the ratio isolates (b), and even then only once (a) is removed by
+    matching ``n_modes`` to Nyquist.
+
+    *Numerical observation*, not a guarantee: the ratio is a diagnostic on a trained
+    model, so it says nothing at untrained weights.
+    """
+
+    edges = (low_edge,) if low_edge == high_edge else (low_edge, high_edge)
+    banded = banded_error(prediction, target, domain, edges)
+    keys = list(banded)
+    return float(banded[keys[-1]] / max(banded[keys[0]], 1e-30))
+
+
+@torch.no_grad()
+def cascade_series(
+    model,
+    domain: PeriodicDomain,
+    initial: Tensor,
+    potential: Tensor,
+    alpha: Tensor,
+    beta: Tensor,
+    dt: float,
+    *,
+    steps: int = 200,
+    stride: int = 25,
+    cutoff: float = 8.0,
+) -> dict:
+    """``E(k)`` versus time plus the energy fraction above ``cutoff``: the G9 diagnostic.
+
+    Initial conditions are band-limited to ``|k| <= 8`` by construction, so every mode
+    above ``cutoff`` starts empty and any energy there is nonlinear transfer.  A model
+    that gets one-step L2 right while failing to cascade is the failure this measures;
+    field-space L2 cannot see it.
+
+    The loop breaks on the first non-finite state rather than raising: an unstable model
+    is a result to record, and the frames captured before divergence are still the
+    comparison the plot needs.
+    """
+
+    from ..data.generate import energy_fraction_above
+
+    magnitude = wave_numbers(domain, dtype=initial.real.dtype)
+    order = torch.argsort(magnitude)
+    state = initial
+    recorded, spectra, fractions = [0], [], []
+    spectra.append(energy_spectrum(state, domain)[order].tolist())
+    fractions.append(float(energy_fraction_above(state, domain, cutoff).mean()))
+    for step in range(1, steps + 1):
+        state = model(state, potential, alpha, beta, float(dt))
+        if not torch.isfinite(state).all():
+            break
+        if step % stride == 0:
+            recorded.append(step)
+            spectra.append(energy_spectrum(state, domain)[order].tolist())
+            fractions.append(
+                float(energy_fraction_above(state, domain, cutoff).mean())
+            )
+    return {
+        "steps": recorded,
+        "wave_numbers": magnitude[order].tolist(),
+        "spectra": spectra,
+        "fraction_above_cutoff": fractions,
+        "cutoff": float(cutoff),
+    }
+
+
 @dataclass
 class SpectralMetrics:
     wave_numbers: list[float]
