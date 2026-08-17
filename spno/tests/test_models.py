@@ -487,3 +487,47 @@ def test_multi_dt_training_refuses_a_model_that_claims_a_single_trained_dt():
             config,
             verbose=False,
         )
+
+
+def test_max_train_pairs_is_honoured_in_both_training_modes():
+    """It was honoured in one-step mode and silently ignored in rollout mode, so every
+    point on a rollout sample-efficiency curve would have used the full split."""
+
+    import dataclasses
+
+    from spno.data.datasets import RolloutBatches
+    from spno.train import train_rollout
+
+    domain = PeriodicDomain.periodic_1d(32)
+    small = dataclasses.replace(SMALL, grid_size=32, n_train=8, n_val=4, steps=6)
+    shards = {s: generate_shard(small, s) for s in ("train", "val")}
+
+    full = len(RolloutBatches(shards["train"], 2, device="cpu"))
+    assert full > 4, "fixture too small for this test to mean anything"
+
+    config = dataclasses.replace(
+        TrainConfig(),
+        epochs=1,
+        batch_size=2,
+        device="cpu",
+        max_train_pairs=4,
+        log_every=100,
+    )
+    torch.manual_seed(0)
+    model = FNOStepOperator(domain, modes=4, width=8, n_layers=1, trained_dt=small.dt)
+    history = train_rollout(
+        model, shards["train"], shards["val"], small, config, horizon=2, verbose=False
+    )
+    assert len(history.train_loss) == 1
+
+
+def test_rollout_batches_subset_restricts_the_window_count():
+    import dataclasses
+
+    from spno.data.datasets import RolloutBatches
+
+    small = dataclasses.replace(SMALL, grid_size=32, n_train=8, steps=6)
+    batches = RolloutBatches(generate_shard(small, "train"), 2, device="cpu")
+    restricted = batches.subset(torch.arange(3))
+    assert len(restricted) == 3
+    assert len(batches) > 3, "the original must be larger or the test is vacuous"

@@ -23,7 +23,12 @@ from spno.data.datasets import (
     assert_no_leakage,
     generate_shard,
 )
-from spno.data.generate import energy_fraction_above, sample_potentials
+from spno.data.corruption import add_field_noise, add_potential_noise
+from spno.data.generate import (
+    energy_fraction_above,
+    sample_initial_conditions,
+    sample_potentials,
+)
 from spno.domain import PeriodicDomain, l2_mass
 from spno.equations.nls import alpha_sampling_is_dense_enough, wrap_wavenumber
 
@@ -302,3 +307,93 @@ def test_multi_dt_batches_are_deterministic_in_the_generator():
 def test_multi_dt_batches_reject_an_empty_mapping():
     with pytest.raises(ValueError, match="at least one"):
         MultiDtBatches({}, device="cpu")
+
+
+# ---------------------------------------------------------------------------
+# Task 13: observation corruption (Phase 8 robustness)
+# ---------------------------------------------------------------------------
+
+
+def test_field_noise_is_reproducible_and_hits_the_requested_relative_level():
+    domain = PeriodicDomain.periodic_1d(64)
+    generator = torch.Generator().manual_seed(0)
+    field = sample_initial_conditions(domain, 16, 8, (1.0, 3.0), generator)
+    noisy = add_field_noise(
+        field, domain, level=0.01, generator=torch.Generator().manual_seed(1)
+    )
+    again = add_field_noise(
+        field, domain, level=0.01, generator=torch.Generator().manual_seed(1)
+    )
+    assert torch.equal(noisy, again)
+    relative = float(
+        (
+            torch.abs(noisy - field).pow(2).sum(-1).sqrt()
+            / torch.abs(field).pow(2).sum(-1).sqrt()
+        ).mean()
+    )
+    assert relative == pytest.approx(0.01, rel=1e-9)
+
+
+def test_zero_field_noise_is_the_identity_bitwise():
+    domain = PeriodicDomain.periodic_1d(64)
+    generator = torch.Generator().manual_seed(0)
+    field = sample_initial_conditions(domain, 4, 8, (1.0, 3.0), generator)
+    assert torch.equal(
+        add_field_noise(field, domain, level=0.0, generator=generator), field
+    )
+
+
+def test_zero_potential_noise_is_the_identity_bitwise():
+    generator = torch.Generator().manual_seed(0)
+    potential = torch.randn(4, 64, dtype=torch.float64, generator=generator)
+    assert torch.equal(
+        add_potential_noise(potential, level=0.0, generator=generator), potential
+    )
+
+
+def test_field_noise_preserves_the_complex_dtype():
+    domain = PeriodicDomain.periodic_1d(64)
+    generator = torch.Generator().manual_seed(0)
+    field = sample_initial_conditions(domain, 4, 8, (1.0, 3.0), generator)
+    noisy = add_field_noise(field, domain, level=0.05, generator=generator)
+    assert noisy.dtype == field.dtype
+    assert float(noisy.imag.abs().max()) > 0
+
+
+def test_field_noise_level_is_per_sample_not_global():
+    """Mass varies across the dataset by design, so a global scale would make the
+    effective noise level depend on a trajectory's mass."""
+
+    domain = PeriodicDomain.periodic_1d(64)
+    field = torch.stack(
+        (
+            torch.ones(64, dtype=torch.complex128),
+            100.0 * torch.ones(64, dtype=torch.complex128),
+        )
+    )
+    noisy = add_field_noise(
+        field, domain, level=0.02, generator=torch.Generator().manual_seed(3)
+    )
+    per_sample = (
+        torch.abs(noisy - field).pow(2).sum(-1).sqrt()
+        / torch.abs(field).pow(2).sum(-1).sqrt()
+    )
+    assert float(per_sample[0]) == pytest.approx(0.02, rel=1e-9)
+    assert float(per_sample[1]) == pytest.approx(0.02, rel=1e-9)
+
+
+def test_potential_noise_scales_with_amplitude():
+    generator = torch.Generator().manual_seed(0)
+    potential = torch.zeros(2, 64, dtype=torch.float64)
+    potential[:, 0] = 2.0
+    noisy = add_potential_noise(potential, level=0.1, generator=generator)
+    assert float((noisy - potential).abs().max()) > 0
+    assert float((noisy - potential).abs().max()) < 2.0
+
+
+def test_a_negative_noise_level_is_refused():
+    domain = PeriodicDomain.periodic_1d(64)
+    generator = torch.Generator().manual_seed(0)
+    field = sample_initial_conditions(domain, 2, 8, (1.0, 3.0), generator)
+    with pytest.raises(ValueError, match="non-negative"):
+        add_field_noise(field, domain, level=-0.1, generator=generator)

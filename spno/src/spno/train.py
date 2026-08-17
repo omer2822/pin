@@ -227,6 +227,14 @@ def train_rollout(
 
     train_batches = RolloutBatches(train_shard, horizon, device=config.device)
     val_batches = OneStepBatches(val_shard, device=config.device)
+    # Kept in sync with train_one_step deliberately: without this, max_train_pairs was
+    # honoured in one-step mode and silently ignored here, so every point on a rollout
+    # sample-efficiency curve would have used the full split.
+    if config.max_train_pairs is not None:
+        chosen = torch.randperm(len(train_batches), generator=generator)[
+            : config.max_train_pairs
+        ]
+        train_batches = train_batches.subset(chosen)
 
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay

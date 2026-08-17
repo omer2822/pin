@@ -334,6 +334,20 @@ class RolloutBatches:
     def __len__(self) -> int:
         return self.trajectory_index.numel()
 
+    def subset(self, indices: Tensor) -> "RolloutBatches":
+        """Restrict to a subset of windows, for sample-efficiency curves.
+
+        Mirrors :meth:`OneStepBatches.subset`.  Without it ``max_train_pairs`` would be
+        silently ignored in rollout mode and every point on the sample-efficiency curve
+        would secretly use the full split.
+        """
+
+        clone = object.__new__(RolloutBatches)
+        clone.__dict__.update(self.__dict__)
+        clone.trajectory_index = self.trajectory_index[indices.to(self.device)]
+        clone.start_index = self.start_index[indices.to(self.device)]
+        return clone
+
     def batches(
         self, batch_size: int, generator: torch.Generator, *, shuffle: bool = True
     ) -> Iterator[dict[str, Tensor]]:
