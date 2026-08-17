@@ -27,8 +27,19 @@ RESULTS_ROOT = ROOT / "results"
 Tensor = torch.Tensor
 
 
-def load_shards(config: DataConfig) -> dict[str, TrajectoryShard]:
-    paths = shard_paths(DATA_ROOT, config_hash(config))
+def load_shards(
+    config: DataConfig, *, identifier: str | None = None
+) -> dict[str, TrajectoryShard]:
+    """Load the three splits for ``config``, or for an explicitly named dataset.
+
+    ``identifier`` lets Phase 9 point at a misspecified shard set without changing
+    ``DataConfig`` (whose hash names the production data).  Defaults to the config's own
+    hash, so every existing caller is unaffected.
+    """
+
+    paths = shard_paths(
+        DATA_ROOT, config_hash(config) if identifier is None else identifier
+    )
     missing = [str(p) for p in paths.values() if not p.exists()]
     if missing:
         raise FileNotFoundError(

@@ -22,6 +22,7 @@ from .data.datasets import (
     TrajectoryShard,
 )
 from .domain import PeriodicDomain, l2_mass
+from .losses.pde_residual import residual_loss
 from .losses.relative_l2 import relative_l2_loss
 from .seeding import seed_everything
 
@@ -378,6 +379,131 @@ def train_multi_dt(
         if verbose and (epoch % config.log_every == 0 or epoch == config.epochs - 1):
             print(
                 f"  epoch {epoch:3d}  multi-dt {train_loss:.4e}  val(1-step) {val_loss:.4e}"
+                + ("  *" if history.best_epoch == epoch else "")
+            )
+
+        if epoch - history.best_epoch >= config.patience:
+            if verbose:
+                print(f"  early stop at epoch {epoch} (patience {config.patience})")
+            break
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+    history.seconds = time.time() - started
+    return history
+
+
+def _pino_loss(model, batch, domain, dt, physics_weight: float) -> Tensor:
+    """Data loss plus ``lambda`` times the Crank--Nicolson residual.
+
+    At ``physics_weight == 0`` this returns the data term by the *same expression*
+    :func:`_one_step_loss` uses, so the sweep's low end is bit-identical to
+    :func:`train_one_step` and is a genuine control rather than a near-miss.
+    """
+
+    step = float(batch.get("dt", dt))
+    prediction = model(
+        batch["psi"], batch["potential"], batch["alpha"], batch["beta"], step
+    )
+    data = relative_l2_loss(prediction, batch["target"], domain)
+    if physics_weight == 0.0:
+        return data
+    physics = residual_loss(
+        batch["psi"],
+        prediction,
+        batch["potential"],
+        domain,
+        batch["alpha"],
+        batch["beta"],
+        step,
+    )
+    return data + physics_weight * physics
+
+
+def train_pino(
+    model,
+    train_shard: TrajectoryShard,
+    val_shard: TrajectoryShard,
+    data_config: DataConfig,
+    config: TrainConfig,
+    *,
+    physics_weight: float,
+    verbose: bool = True,
+) -> TrainHistory:
+    """One-step training with a soft PDE-residual penalty: Phase 7a.
+
+    **The confound, restated where it is applied.**  The midpoint residual uses the
+    Delfour--Fortin--Payre averaging, so its own exact plane-wave solution advances by
+    the Cayley transform, whose modulus is *exactly* one.  This physics loss therefore
+    smuggles in the very invariant the study compares methods on, and every 7a number
+    must be reported with that said.  See :mod:`spno.losses.pde_residual`.
+
+    **Validation is the data loss only.**  ``evaluate_one_step`` ignores the physics
+    term, so every ``lambda`` in the sweep reports on the same scale and early stopping
+    is not confounded by a penalty whose magnitude changes with the weight.  Reporting
+    the composite objective as "validation loss" would make the sweep's y-axis a
+    different quantity at every point.
+
+    Report the **whole sweep**, never a tuned value: which ``lambda`` wins is itself the
+    result, and a single tuned number hides whether the physics term helped at all.
+    """
+
+    if physics_weight < 0:
+        raise RuntimeError("physics_weight must be non-negative")
+
+    domain = data_config.domain
+    dt = data_config.dt
+    generator = seed_everything(config.seed)
+    model.to(config.device)
+
+    train_batches = OneStepBatches(train_shard, device=config.device)
+    val_batches = OneStepBatches(val_shard, device=config.device)
+    if config.max_train_pairs is not None:
+        chosen = torch.randperm(len(train_batches), generator=generator)[
+            : config.max_train_pairs
+        ]
+        train_batches = train_batches.subset(chosen)
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
+    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(config.epochs, 1)
+    )
+
+    history = TrainHistory()
+    best_state = None
+    started = time.time()
+
+    for epoch in range(config.epochs):
+        model.train()
+        running, seen = 0.0, 0
+        for batch in train_batches.batches(config.batch_size, generator):
+            optimizer.zero_grad()
+            loss = _pino_loss(model, batch, domain, dt, physics_weight)
+            loss.backward()
+            if config.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
+            optimizer.step()
+            weight = batch["psi"].shape[0]
+            running += float(loss.detach()) * weight
+            seen += weight
+        scheduler.step()
+
+        train_loss = running / max(seen, 1)
+        val_loss = evaluate_one_step(model, val_batches, domain, dt, config)
+        history.train_loss.append(train_loss)
+        history.val_loss.append(val_loss)
+
+        if val_loss < history.best_val:
+            history.best_val = val_loss
+            history.best_epoch = epoch
+            best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+
+        if verbose and (epoch % config.log_every == 0 or epoch == config.epochs - 1):
+            print(
+                f"  epoch {epoch:3d}  pino(l={physics_weight:g}) {train_loss:.4e}  "
+                f"val(data) {val_loss:.4e}"
                 + ("  *" if history.best_epoch == epoch else "")
             )
 

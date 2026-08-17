@@ -23,7 +23,12 @@ import math
 import pytest
 import torch
 
+from dataclasses import replace
+
+from spno.config import DataConfig, config_hash
+from spno.data.datasets import generate_shard
 from spno.domain import PeriodicDomain, l2_mass
+from spno.misspecification import MisspecificationConfig
 from spno.solvers.perturbed import (
     GainLossSplitStepNLSOperator,
     NonlocalSplitStepNLSOperator,
@@ -169,3 +174,66 @@ def test_the_substepped_wrapper_reproduces_the_reference_on_the_exact_inner_step
         wrapped(field, potential, alpha, beta, DT),
         reference(field, potential, alpha, beta, DT),
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 15: MisspecificationConfig and generator injection
+# ---------------------------------------------------------------------------
+
+
+def test_the_exact_case_reuses_the_production_identifier():
+    """Dial zero must not orphan the 206 MB of shards already on disk."""
+
+    data = DataConfig()
+    assert MisspecificationConfig().identifier(data) == config_hash(data)
+
+
+def test_every_nonzero_dial_gets_its_own_identifier():
+    data = DataConfig()
+    identifiers = {
+        MisspecificationConfig(nonlocal_sigma=s, gain_loss_gamma=g).identifier(data)
+        for s, g in [(0.0, 0.0), (0.25, 0.0), (0.5, 0.0), (0.0, 1e-3), (0.0, 1e-2)]
+    }
+    assert len(identifiers) == 5
+
+
+def test_turning_two_dials_at_once_is_refused():
+    """A simultaneous perturbation cannot be attributed to either broken assumption."""
+
+    # The plan's snippet paired the message "turn one dial at a time" with
+    # match="one at a time", which cannot match it -- "dial" sits between.
+    with pytest.raises(ValueError, match="one dial at a time"):
+        MisspecificationConfig(nonlocal_sigma=0.5, gain_loss_gamma=1e-3)
+
+
+def test_the_exact_dial_reference_is_the_substepped_reference_itself():
+    assert type(MisspecificationConfig().reference(DataConfig())) is SubsteppedReference
+
+
+def test_a_shard_generated_at_dial_zero_is_bitwise_the_production_shard():
+    """The end-to-end bitwise test: injection must not perturb anything."""
+
+    small = replace(DataConfig(), n_test=2, steps=3, grid_size=32)
+    baseline = generate_shard(small, "test")
+    injected = generate_shard(
+        small, "test", reference=MisspecificationConfig().reference(small)
+    )
+    assert torch.equal(injected.trajectories, baseline.trajectories)
+
+
+def test_a_dialled_shard_actually_differs():
+    """The paired negative: if injection changed nothing, Phase 9 would sweep noise."""
+
+    small = replace(DataConfig(), n_test=2, steps=3, grid_size=32)
+    baseline = generate_shard(small, "test")
+    perturbed = generate_shard(
+        small,
+        "test",
+        reference=MisspecificationConfig(nonlocal_sigma=0.5).reference(small),
+    )
+    assert not torch.equal(perturbed.trajectories, baseline.trajectories)
+
+
+def test_a_negative_sigma_is_refused_by_the_config():
+    with pytest.raises(ValueError, match="non-negative"):
+        MisspecificationConfig(nonlocal_sigma=-0.1)

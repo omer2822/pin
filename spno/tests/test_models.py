@@ -531,3 +531,96 @@ def test_rollout_batches_subset_restricts_the_window_count():
     restricted = batches.subset(torch.arange(3))
     assert len(restricted) == 3
     assert len(batches) > 3, "the original must be larger or the test is vacuous"
+
+
+# ---------------------------------------------------------------------------
+# Task 11: PINO training (Phase 7a)
+# ---------------------------------------------------------------------------
+
+
+def test_pino_at_zero_weight_reproduces_plain_one_step_training_exactly():
+    """The sweep must contain the baseline it is measured against.
+
+    lambda=0 has to be bit-identical to train_one_step, or the sweep's low end is a
+    different experiment rather than the control.
+    """
+
+    import dataclasses
+
+    from spno.train import train_pino
+
+    domain = PeriodicDomain.periodic_1d(32)
+    small = dataclasses.replace(SMALL, grid_size=32, n_train=8, n_val=4, steps=3)
+    shards = {s: generate_shard(small, s) for s in ("train", "val")}
+    config = dataclasses.replace(
+        TrainConfig(), epochs=2, batch_size=4, device="cpu", log_every=100
+    )
+
+    torch.manual_seed(0)
+    plain = FNOStepOperator(domain, modes=4, width=8, n_layers=1, trained_dt=small.dt)
+    baseline = train_one_step(
+        plain, shards["train"], shards["val"], small, config, verbose=False
+    )
+    torch.manual_seed(0)
+    pino = FNOStepOperator(domain, modes=4, width=8, n_layers=1, trained_dt=small.dt)
+    swept = train_pino(
+        pino, shards["train"], shards["val"], small, config,
+        physics_weight=0.0, verbose=False,
+    )
+    assert swept.val_loss == pytest.approx(baseline.val_loss, rel=1e-12)
+
+
+def test_a_positive_physics_weight_changes_the_trajectory():
+    """The paired negative: if lambda did nothing, the sweep would be vacuous."""
+
+    import dataclasses
+
+    from spno.train import train_pino
+
+    domain = PeriodicDomain.periodic_1d(32)
+    small = dataclasses.replace(SMALL, grid_size=32, n_train=8, n_val=4, steps=3)
+    shards = {s: generate_shard(small, s) for s in ("train", "val")}
+    config = dataclasses.replace(
+        TrainConfig(), epochs=2, batch_size=4, device="cpu", log_every=100
+    )
+
+    results = []
+    for weight in (10.0, 0.0):
+        torch.manual_seed(0)
+        model = FNOStepOperator(
+            domain, modes=4, width=8, n_layers=1, trained_dt=small.dt
+        )
+        results.append(
+            train_pino(
+                model, shards["train"], shards["val"], small, config,
+                physics_weight=weight, verbose=False,
+            ).val_loss
+        )
+    assert results[0] != pytest.approx(results[1], rel=1e-9)
+
+
+def test_pino_validation_reports_data_loss_only():
+    """All lambda values must report on the same scale, or early stopping and the
+    sweep's y-axis would both be confounded by the physics term."""
+
+    import dataclasses
+
+    from spno.train import evaluate_one_step, train_pino
+
+    domain = PeriodicDomain.periodic_1d(32)
+    small = dataclasses.replace(SMALL, grid_size=32, n_train=8, n_val=4, steps=3)
+    shards = {s: generate_shard(small, s) for s in ("train", "val")}
+    config = dataclasses.replace(
+        TrainConfig(), epochs=1, batch_size=4, device="cpu", log_every=100
+    )
+
+    torch.manual_seed(0)
+    model = FNOStepOperator(domain, modes=4, width=8, n_layers=1, trained_dt=small.dt)
+    history = train_pino(
+        model, shards["train"], shards["val"], small, config,
+        physics_weight=5.0, verbose=False,
+    )
+    direct = evaluate_one_step(
+        model, OneStepBatches(shards["val"], device="cpu"), domain, small.dt, config
+    )
+    assert history.val_loss[0] == pytest.approx(direct, rel=1e-12)

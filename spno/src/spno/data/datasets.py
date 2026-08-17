@@ -94,8 +94,16 @@ def generate_shard(
     *,
     potential_family: str = "random",
     steps: int | None = None,
+    reference: "torch.nn.Module | None" = None,
 ) -> TrajectoryShard:
-    """Generate one split.  Deterministic in ``(config.seed, split)``."""
+    """Generate one split.  Deterministic in ``(config.seed, split)``.
+
+    ``reference`` injects the trajectory generator, which is how Phase 9 produces
+    misspecified data without touching :class:`DataConfig` (whose hash names 206 MB of
+    shards on disk).  Passing ``None`` builds the standard substepped reference, so
+    every existing caller is unaffected and a dial-zero generator reproduces the
+    production shards **bitwise**.
+    """
 
     if split not in SPLIT_SEED_OFFSET:
         raise ValueError(f"split must be one of {sorted(SPLIT_SEED_OFFSET)}")
@@ -121,7 +129,11 @@ def generate_shard(
         n, config.alpha_range, config.beta_range, generator
     )
 
-    reference = SubsteppedReference(domain, config.substeps)
+    reference = (
+        SubsteppedReference(domain, config.substeps)
+        if reference is None
+        else reference
+    )
     k_wrap = wrap_wavenumber(config.alpha_range[1], config.dt)
     cascade_steps, above_train, above_wrap = [], [], []
 
