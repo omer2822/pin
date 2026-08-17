@@ -80,7 +80,36 @@ class SchrodingerExact(nn.Module):
         return torch.cat((torch.cos(phase), torch.sin(phase)), dim=1)
 
 
+class FullNLSPlaneWave(nn.Module):
+    def __init__(
+        self,
+        wave_number: int,
+        alpha: float,
+        beta: float,
+        potential_value: float,
+    ) -> None:
+        super().__init__()
+        self.wave_number = wave_number
+        self.omega = alpha * wave_number**2 - beta + potential_value
+
+    def forward(self, x, t):
+        phase = self.wave_number * x - self.omega * t
+        return torch.cat((torch.cos(phase), torch.sin(phase)), dim=1)
+
+
 class PlaygroundTests(unittest.TestCase):
+    def test_periodic_second_derivative_is_exact_for_represented_fourier_mode(self):
+        grid_size, wave_number = 64, 7
+        x = -math.pi + 2 * math.pi * torch.arange(grid_size, dtype=torch.float64) / grid_size
+        psi = torch.exp(1j * wave_number * x)
+
+        actual = pg.periodic_second_derivative(psi, 2 * math.pi)
+
+        self.assertLess(
+            (actual + wave_number**2 * psi).abs().max().item(),
+            1e-5,
+        )
+
     def test_differentiate_first_and_second_order(self):
         x = torch.linspace(-1, 1, 9).reshape(-1, 1).requires_grad_(True)
         y = x**3 + 2 * x
@@ -127,14 +156,56 @@ class PlaygroundTests(unittest.TestCase):
 
         self.assertLess(residual.abs().max().item(), 1e-5)
 
-    def test_schrodinger_plane_wave_has_zero_two_channel_residual(self):
+    def test_schrodinger_plane_wave_has_zero_spectral_residual(self):
         problem = pg.SchrodingerProblem(wavenumber=2)
-        x, t = sample_coordinates(-math.pi, math.pi)
+        x = (-math.pi + 2 * math.pi * torch.arange(128, dtype=torch.float64) / 128).reshape(-1, 1)
+        t = torch.full_like(x, 0.25, requires_grad=True)
 
         residual = problem.residual(SchrodingerExact(2), x, t)
 
-        self.assertEqual(residual.shape, (x.shape[0], 2))
+        self.assertTrue(residual.is_complex())
+        self.assertEqual(residual.shape, (x.shape[0],))
         self.assertLess(residual.abs().max().item(), 1e-5)
+
+    def test_spectral_nls_plane_wave_has_zero_residual(self):
+        alpha, beta, potential_value = 0.7, 0.35, 0.2
+        problem = pg.SchrodingerProblem(
+            wavenumber=3,
+            alpha=alpha,
+            beta=beta,
+            potential=lambda x: torch.full_like(x, potential_value),
+            spectral_grid_size=64,
+        )
+        x = (-math.pi + 2 * math.pi * torch.arange(64, dtype=torch.float64) / 64).reshape(-1, 1)
+        t = torch.full_like(x, 0.25, requires_grad=True)
+
+        residual = problem.residual(
+            FullNLSPlaneWave(3, alpha, beta, potential_value), x, t
+        )
+
+        self.assertTrue(residual.is_complex())
+        self.assertLess(residual.abs().max().item(), 1e-5)
+
+    def test_schrodinger_collocation_uses_endpoint_free_periodic_grids(self):
+        problem = pg.SchrodingerProblem(spectral_grid_size=8)
+
+        x, t = problem.sample_collocation(15, torch.device("cpu"))
+
+        expected = -math.pi + 2 * math.pi * torch.arange(8) / 8
+        self.assertEqual(x.shape, (16, 1))
+        self.assertEqual(t.shape, (16, 1))
+        self.assertTrue(torch.allclose(x.reshape(-1, 8)[0], expected))
+        self.assertTrue(torch.allclose(x.reshape(-1, 8)[1], expected))
+        self.assertTrue(torch.allclose(t.reshape(-1, 8)[:, 0:1], t.reshape(-1, 8)))
+
+    def test_schrodinger_rejects_potential_callable_with_wrong_shape(self):
+        problem = pg.SchrodingerProblem(
+            potential=lambda x: torch.zeros(x.shape[0]), spectral_grid_size=8
+        )
+        x, t = problem.sample_collocation(8, torch.device("cpu"))
+
+        with self.assertRaisesRegex(ValueError, "potential"):
+            problem.residual(SchrodingerExact(2), x, t)
 
     def test_schrodinger_features_are_periodic(self):
         problem = pg.SchrodingerProblem()
@@ -191,7 +262,9 @@ class PlaygroundTests(unittest.TestCase):
             "--pde heat",
             "--pde reaction-diffusion",
             "--pde schrodinger",
-            "i*psi_t + 0.5*psi_xx = 0",
+            "i*psi_t + alpha*psi_xx + beta*|psi|^2*psi - V*psi = 0",
+            "FFT",
+            "SchrodingerProblem(",
         ):
             with self.subTest(text=text):
                 self.assertIn(text, readme)

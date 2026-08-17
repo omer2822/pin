@@ -25,13 +25,13 @@ Targets must therefore come from a converged, substepped reference.
 
 from __future__ import annotations
 
+import numpy as np
 import torch
 import torch.nn as nn
 
 from ..domain import PeriodicDomain, batch_parameter
 
 Tensor = torch.Tensor
-
 
 class SplitStepNLSOperator(nn.Module):
     """One symmetric unitary Strang step for NLS with an arbitrary real potential."""
@@ -103,6 +103,56 @@ class SubsteppedReference(nn.Module):
             evolved = self.step(evolved, potential, alpha, beta, sub_dt)
         return evolved
 
+def split_step_solver(
+    psi0: np.ndarray,
+    x: np.ndarray,
+    dt: float,
+    steps: int,
+    kappa: float,
+) -> np.ndarray:
+    """Solve the 1D cubic NLS with a NumPy split-step method.
+
+    This is a small, unbatched NumPy convenience solver.  The Torch operators below
+    are the package's differentiable, batched reference implementation; this helper
+    is intentionally kept separate because it has a different API and does not use
+    :class:`PeriodicDomain`.
+
+    Args:
+        psi0: Initial complex-valued field with shape ``(N,)``.
+        x: Uniform spatial grid with shape ``(N,)``.
+        dt: Time step.
+        steps: Number of time steps.
+        kappa: Cubic nonlinear coefficient.
+
+    Returns:
+        The field after ``steps`` split steps.
+    """
+
+    psi = np.asarray(psi0, dtype=complex)
+    grid = np.asarray(x)
+    if psi.ndim != 1 or grid.ndim != 1 or psi.shape != grid.shape:
+        raise ValueError("psi0 and x must be one-dimensional arrays of equal length")
+    if grid.size < 2:
+        raise ValueError("x must contain at least two grid points")
+    if not isinstance(steps, (int, np.integer)) or steps < 0:
+        raise ValueError("steps must be a nonnegative integer")
+
+    n = grid.size
+    length = grid[-1] - grid[0]
+    k = 2 * np.pi * np.fft.fftfreq(n, d=length / n)
+    operator_dispersion = np.exp(-1j * (k**2) * (dt / 2))
+
+    for _ in range(steps):
+        psi_freq = np.fft.fft(psi)
+        psi = np.fft.ifft(psi_freq * operator_dispersion)
+
+        operator_nonlinear = np.exp(-1j * kappa * np.abs(psi) ** 2 * dt)
+        psi *= operator_nonlinear
+
+        psi_freq = np.fft.fft(psi)
+        psi = np.fft.ifft(psi_freq * operator_dispersion)
+
+    return psi
 
 @torch.no_grad()
 def integrate(

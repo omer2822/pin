@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import math
 from pathlib import Path
 import time
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 import numpy as np
 import torch
@@ -52,7 +52,26 @@ def differentiate(y: Tensor, x: Tensor, order: int = 1) -> Tensor:
 
 
 def mean_square(values: Tensor) -> Tensor:
-    return torch.mean(values**2)
+    """Mean squared magnitude, valid for real and complex residuals."""
+
+    return torch.mean(torch.abs(values) ** 2)
+
+
+def periodic_second_derivative(field: Tensor, length: float) -> Tensor:
+    """Return the FFT second derivative along the final periodic spatial axis."""
+
+    if field.ndim < 1 or field.shape[-1] < 2:
+        raise ValueError("field must have a periodic spatial axis of length at least two")
+    if not math.isfinite(length) or length <= 0:
+        raise ValueError("length must be positive and finite")
+
+    count = field.shape[-1]
+    spacing = length / count
+    wave_numbers = 2 * math.pi * torch.fft.fftfreq(
+        count, d=spacing, device=field.device, dtype=field.real.dtype
+    )
+    transformed = torch.fft.fft(field, dim=-1)
+    return torch.fft.ifft(-(wave_numbers**2) * transformed, dim=-1)
 
 
 class PDEProblem:
@@ -75,6 +94,13 @@ class PDEProblem:
 
     def initial_target(self, x: Tensor) -> Tensor:
         raise NotImplementedError
+
+    def sample_collocation(
+        self, count: int, device: torch.device
+    ) -> tuple[Tensor, Tensor]:
+        """Draw coordinate pairs for a PDE residual evaluation."""
+
+        return _sample_points(self, count, device)
 
     def residual(self, model: nn.Module, x: Tensor, t: Tensor) -> Tensor:
         raise NotImplementedError
@@ -181,7 +207,7 @@ class ReactionDiffusionProblem(PDEProblem):
 
 class SchrodingerProblem(PDEProblem):
     name = "schrodinger"
-    equation = "i*psi_t + 0.5*psi_xx = 0"
+    equation = "i*psi_t + alpha*psi_xx + beta*|psi|^2*psi - V*psi = 0"
     x_min = -math.pi
     x_max = math.pi
     input_dim = 3
@@ -189,35 +215,99 @@ class SchrodingerProblem(PDEProblem):
     component_names = ("Re(psi)", "Im(psi)")
     has_exact_solution = True
 
-    def __init__(self, wavenumber: int = 2) -> None:
+    def __init__(
+        self,
+        wavenumber: int = 2,
+        alpha: float = 0.5,
+        beta: float = 0.0,
+        potential: Callable[[Tensor], Tensor] | None = None,
+        spectral_grid_size: int = 128,
+    ) -> None:
         if wavenumber <= 0:
             raise ValueError("wavenumber must be positive")
+        if not math.isfinite(alpha) or alpha <= 0:
+            raise ValueError("alpha must be positive and finite")
+        if not math.isfinite(beta):
+            raise ValueError("beta must be finite")
+        if not isinstance(spectral_grid_size, int) or spectral_grid_size < 2:
+            raise ValueError("spectral_grid_size must be an integer of at least two")
+        if potential is not None and not callable(potential):
+            raise ValueError("potential must be a callable or None")
         self.wavenumber = wavenumber
+        self.alpha = alpha
+        self.beta = beta
+        self.potential = potential
+        self.spectral_grid_size = spectral_grid_size
+        self.has_exact_solution = potential is None
 
     def input_features(self, x: Tensor, t: Tensor) -> Tensor:
         t_scaled = 2 * t / self.t_final - 1
         return torch.cat((torch.sin(x), torch.cos(x), t_scaled), dim=1)
 
     def _plane_wave(self, x: Tensor, t: Tensor) -> Tensor:
-        phase = self.wavenumber * x - 0.5 * self.wavenumber**2 * t
+        omega = self.alpha * self.wavenumber**2 - self.beta
+        phase = self.wavenumber * x - omega * t
         return torch.cat((torch.cos(phase), torch.sin(phase)), dim=1)
 
     def initial_target(self, x: Tensor) -> Tensor:
         return self._plane_wave(x, torch.zeros_like(x))
 
+    def sample_collocation(
+        self, count: int, device: torch.device
+    ) -> tuple[Tensor, Tensor]:
+        """Sample full endpoint-free periodic grids at random collocation times."""
+
+        if count <= 0:
+            raise ValueError("count must be positive")
+        time_count = math.ceil(count / self.spectral_grid_size)
+        length = self.x_max - self.x_min
+        grid = self.x_min + length * torch.arange(
+            self.spectral_grid_size, device=device, dtype=torch.get_default_dtype()
+        ) / self.spectral_grid_size
+        x = grid.repeat(time_count).reshape(-1, 1)
+        sampled_times = self.t_final * torch.rand(
+            time_count, 1, device=device, dtype=grid.dtype
+        )
+        t = sampled_times.repeat_interleave(self.spectral_grid_size, dim=0)
+        return x, t.requires_grad_(True)
+
+    def _potential_values(self, x: Tensor) -> Tensor:
+        if self.potential is None:
+            return torch.zeros_like(x)
+        values = self.potential(x)
+        if not isinstance(values, Tensor) or values.shape != x.shape:
+            raise ValueError("potential must return a tensor with the same shape as x")
+        if values.is_complex():
+            raise ValueError("potential must return real values")
+        return values.to(device=x.device, dtype=x.dtype)
+
     def residual(self, model: nn.Module, x: Tensor, t: Tensor) -> Tensor:
-        x.requires_grad_(True)
+        if x.ndim != 2 or t.ndim != 2 or x.shape != t.shape or x.shape[1] != 1:
+            raise ValueError("spectral NLS coordinates must be aligned single-column tensors")
+        if x.shape[0] % self.spectral_grid_size:
+            raise ValueError("spectral NLS points must contain complete spatial grids")
         t.requires_grad_(True)
-        psi = model(x, t)
-        real = psi[:, 0:1]
-        imaginary = psi[:, 1:2]
-        real_residual = -differentiate(imaginary, t) + 0.5 * differentiate(
-            real, x, 2
+        prediction = model(x, t)
+        if prediction.shape != (x.shape[0], self.output_dim):
+            raise ValueError("Schrodinger models must return aligned real and imaginary columns")
+        real, imaginary = prediction[:, 0:1], prediction[:, 1:2]
+        psi = torch.complex(real, imaginary)
+        psi_t = torch.complex(differentiate(real, t), differentiate(imaginary, t))
+
+        time_count = x.shape[0] // self.spectral_grid_size
+        psi_grid = psi.reshape(time_count, self.spectral_grid_size)
+        psi_t_grid = psi_t.reshape(time_count, self.spectral_grid_size)
+        potential_grid = self._potential_values(x).reshape(
+            time_count, self.spectral_grid_size
         )
-        imaginary_residual = differentiate(real, t) + 0.5 * differentiate(
-            imaginary, x, 2
+        psi_xx = periodic_second_derivative(psi_grid, self.x_max - self.x_min)
+        residual = (
+            1j * psi_t_grid
+            + self.alpha * psi_xx
+            + self.beta * torch.abs(psi_grid) ** 2 * psi_grid
+            - potential_grid * psi_grid
         )
-        return torch.cat((real_residual, imaginary_residual), dim=1)
+        return residual.reshape(-1)
 
     def boundary_loss(self, model: nn.Module, t: Tensor) -> Tensor:
         x_left, x_right = self._boundary_coordinates(t)
@@ -382,7 +472,7 @@ def _losses_at_samples(
 def _sample_training_batch(
     problem: PDEProblem, config: TrainConfig, device: torch.device
 ) -> tuple[tuple[Tensor, Tensor], Tensor, Tensor]:
-    field_points = _sample_points(problem, config.collocation, device)
+    field_points = problem.sample_collocation(config.collocation, device)
     initial_x, _ = _sample_points(problem, config.initial, device)
     _, boundary_t = _sample_points(problem, config.boundary, device)
     return field_points, initial_x, boundary_t

@@ -287,7 +287,8 @@ def make_plots(summary, payload, output):
 
     for axis in axes.flat:
         axis.grid(True, alpha=0.3)
-        axis.legend(fontsize=8)
+        if axis.get_legend_handles_labels()[0]:
+            axis.legend(fontsize=8)
     figure.suptitle(f"Phases 4-5  [{payload['data_hash']}]  mode={payload['mode']}")
     figure.tight_layout()
     figure.savefig(output / "plots" / f"phase45_{payload['mode']}.png", dpi=150)

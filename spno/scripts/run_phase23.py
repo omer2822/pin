@@ -184,7 +184,8 @@ def make_plots(per_seed, summary, payload, output):
         axis.set_xscale("log")
         axis.set_yscale("log")
         axis.grid(True, which="both", alpha=0.3)
-        axis.legend(fontsize=8)
+        if axis.get_legend_handles_labels()[0]:
+            axis.legend(fontsize=8)
 
     figure.suptitle(
         f"Phases 2-3: FNO vs mass-projected FNO  [{payload['data_hash']}]  "

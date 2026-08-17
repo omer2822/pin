@@ -54,27 +54,42 @@ python 04_pinn_playground.py --pde schrodinger
 ```
 
 These examples cover Dirichlet, Neumann, and periodic boundary conditions. Heat and
-Schrödinger also have analytic solutions, so their figures and console output report
-the relative L2 error rather than only the training residual. Figures are saved as
+the default zero-potential Schrödinger setup have analytic solutions, so their figures
+and console output report the relative L2 error rather than only the training residual. Figures are saved as
 `figures/04_pinn_<pde>.png`; override the path with `--output`.
 
 The Schrödinger example solves
 
 ```text
-i*psi_t + 0.5*psi_xx = 0
+i*psi_t + alpha*psi_xx + beta*|psi|^2*psi - V*psi = 0
 ```
 
 without requiring complex-valued PyTorch layers. The network emits two real channels,
-`psi = a + i*b`, and the complex equation becomes two coupled real residuals:
+`psi = a + i*b`. It uses autograd for `psi_t`, then evaluates every collocation time
+on a full endpoint-free periodic spatial grid and computes `psi_xx` with an FFT:
 
 ```text
--b_t + 0.5*a_xx = 0
- a_t + 0.5*b_xx = 0
+psi_hat = FFT(psi)
+psi_xx = IFFT(-k^2 * psi_hat)
+L_PDE = mean(|i*psi_t + alpha*psi_xx + beta*|psi|^2*psi - V*psi|^2)
 ```
 
 Its inputs are `(sin(x), cos(x), t)`, making the prediction periodic in space by
 construction. The boundary loss additionally matches both the value and spatial
-derivative at `-pi` and `pi`.
+derivative at `-pi` and `pi`. The default is `alpha=0.5`, `beta=0`, and `V=0`; create
+the problem programmatically to use a nonlinear term or a periodic potential callable:
+
+```python
+problem = SchrodingerProblem(
+    alpha=0.7,
+    beta=0.35,
+    potential=lambda x: 0.2 * torch.cos(x),
+    spectral_grid_size=128,
+)
+```
+
+The callable potential API is intentionally programmatic rather than a CLI string
+option, so it can describe arbitrary differentiable periodic potentials.
 
 For a quick wiring check rather than a converged solution:
 
@@ -93,6 +108,44 @@ standard library test runner:
 ```bash
 python -m unittest test_pinn_playground -v
 ```
+
+---
+
+## PhysicsNeMo v2 heat-PINN playground
+
+`07_physicsnemo_heat_pinn.py` is the framework-backed companion to the
+from-scratch playground. It follows the current PhysicsNeMo v2 style: an
+explicit PyTorch training loop, a symbolic `physicsnemo.sym.PDE`, and a
+`PhysicsInformer` rather than the archived `Solver` / `Domain` API.
+
+It solves the same analytic 1D heat setup used by the general playground:
+
+```text
+u_t - alpha*u_xx = 0,  x in [-1, 1],  t in [0, 1]
+u(x, 0) = cos(pi*x/2),  u(-1, t) = u(1, t) = 0
+```
+
+PhysicsNeMo computes the symbolic spatial derivative `u_xx`; PyTorch autograd
+computes `u_t`, because time is not a spatial `PhysicsInformer` coordinate. The
+default 10,000-step, 4,096-point budget is intended for an NVIDIA GPU. Install
+the optional dependency in this repository's existing virtual environment:
+
+```bash
+source pinn-neural-operators/venv./bin/activate
+python -m pip install --upgrade "nvidia-physicsnemo[sym]"
+```
+
+Then run the GPU-oriented example or a short CPU wiring check:
+
+```bash
+python 07_physicsnemo_heat_pinn.py
+python 07_physicsnemo_heat_pinn.py --device cpu --steps 2 \
+  --collocation 16 --initial 8 --boundary 8 --width 8 --depth 2 --log-every 0
+```
+
+It writes prediction, analytic solution, and absolute-error panels to
+`figures/07_physicsnemo_heat.png`. PhysicsNeMo is intentionally not included in
+`requirements.txt`, so the earlier tutorials remain lightweight.
 
 ---
 
