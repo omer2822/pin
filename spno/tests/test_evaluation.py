@@ -563,3 +563,53 @@ def test_phase_payload_gate_rejects_a_phase_six_record_with_only_provenance():
                 }
             }}
         })
+
+
+@pytest.mark.parametrize(
+    ("arm", "measured"),
+    [
+        (
+            "G6a",
+            {"C1": {"measurements": {"0.005": {"one_step_test": 0.1}}}},
+        ),
+        (
+            "G6b",
+            {"C1": {"by_dt": {"0.005": {"principal": 0.1}}}},
+        ),
+    ],
+)
+def test_phase_payload_gate_accepts_measured_g6_models_with_separate_unsupported_metadata(
+    arm, measured
+):
+    from spno.evaluation.payloads import require_phase_arms
+
+    require_phase_arms(6, [arm], {
+        arm: {
+            "by_model": measured,
+            "unsupported": {"A": {"reason": "FNO ignores dt"}},
+        }
+    })
+
+
+@pytest.mark.parametrize("arm", ["G6a", "G6b"])
+def test_phase_payload_gate_rejects_g6_unsupported_metadata_without_a_measured_model(arm):
+    from spno.evaluation.payloads import require_phase_arms
+
+    with pytest.raises(RuntimeError):
+        require_phase_arms(6, [arm], {
+            arm: {"unsupported": {"A": {"reason": "FNO ignores dt"}}}
+        })
+
+
+@pytest.mark.parametrize("arm", ["G6a", "G6b"])
+def test_phase_payload_gate_rejects_a_g6_unsupported_entry_inside_by_model(arm):
+    from spno.evaluation.payloads import require_phase_arms
+
+    with pytest.raises(RuntimeError):
+        require_phase_arms(6, [arm], {
+            arm: {
+                "by_model": {
+                    "A": {"unsupported": {"reason": "FNO ignores dt"}}
+                }
+            }
+        })
