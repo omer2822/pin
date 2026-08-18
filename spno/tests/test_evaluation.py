@@ -469,3 +469,14 @@ def test_cascade_series_survives_a_diverging_model():
     assert len(series["steps"]) == len(series["fraction_above_cutoff"])
     assert len(series["steps"]) >= 1, "frame 0 is always recorded"
     assert all(math.isfinite(v) for v in series["fraction_above_cutoff"])
+
+
+def test_phase_payload_gate_rejects_metadata_only_and_nonfinite_results():
+    from spno.evaluation.payloads import require_phase_arms
+
+    with pytest.raises(RuntimeError, match="G1"):
+        require_phase_arms(6, ["G1"], {"G1": {"identifier": "shift"}})
+    with pytest.raises(RuntimeError, match="finite"):
+        require_phase_arms(9, ["sigma"], {
+            "sigma": {"measurements": {"0.0": {"relative_to_A": {"C1": float("nan")}}}}
+        })
