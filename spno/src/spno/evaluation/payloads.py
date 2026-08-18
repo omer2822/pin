@@ -23,27 +23,33 @@ REQUIRED_ARM_KEYS = {
     9: {"sigma": ("measurements",), "gamma": ("measurements",)},
 }
 
+PROVENANCE_KEYS = frozenset({"identifier", "potential_family", "note"})
 
-def _has_complete_finite_measurements(value) -> bool | None:
-    """Return whether a value contains valid metrics, invalid data, or only prose."""
 
+def _has_complete_finite_measurements(value) -> bool:
     if isinstance(value, bool):
         return False
     if isinstance(value, (int, float)):
         return math.isfinite(float(value))
-    if isinstance(value, str):
-        return None
     if isinstance(value, dict):
-        children = [_has_complete_finite_measurements(item) for item in value.values()]
-        return bool(value) and any(child is True for child in children) and all(
-            child is not False for child in children
+        return bool(value) and all(
+            _has_complete_finite_measurements(item) for item in value.values()
         )
     if isinstance(value, (list, tuple)):
-        children = [_has_complete_finite_measurements(item) for item in value]
-        return bool(value) and any(child is True for child in children) and all(
-            child is not False for child in children
-        )
+        return bool(value) and all(_has_complete_finite_measurements(item) for item in value)
     return False
+
+
+def _has_complete_phase_six_measurements(value) -> bool:
+    if not isinstance(value, dict) or not value:
+        return False
+    for record in value.values():
+        if not isinstance(record, dict):
+            return False
+        metrics = {key: item for key, item in record.items() if key not in PROVENANCE_KEYS}
+        if not _has_complete_finite_measurements(metrics):
+            return False
+    return True
 
 
 def require_phase_arms(phase: int, selected: Iterable[str], experiments: dict) -> None:
@@ -52,9 +58,17 @@ def require_phase_arms(phase: int, selected: Iterable[str], experiments: dict) -
         if arm not in experiments or not experiments[arm]:
             raise RuntimeError(f"Phase {phase} arm {arm} has no measured result")
         for key in requirements[arm]:
-            if key not in experiments[arm] or not _has_complete_finite_measurements(
-                experiments[arm][key]
-            ):
+            if key not in experiments[arm]:
+                raise RuntimeError(
+                    f"Phase {phase} arm {arm}.{key} needs a finite measurement"
+                )
+            if phase == 6 and arm in {"G1", "G2", "G3", "G4"} and key == "measurements":
+                has_measurements = _has_complete_phase_six_measurements(
+                    experiments[arm][key]
+                )
+            else:
+                has_measurements = _has_complete_finite_measurements(experiments[arm][key])
+            if not has_measurements:
                 raise RuntimeError(
                     f"Phase {phase} arm {arm}.{key} needs a finite measurement"
                 )

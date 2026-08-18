@@ -516,3 +516,27 @@ def test_phase_payload_gate_accepts_phase_six_provenance_alongside_metrics():
             }
         }}
     })
+
+
+def test_phase_payload_gate_rejects_a_string_inside_a_metric_mapping():
+    from spno.evaluation.payloads import require_phase_arms
+
+    with pytest.raises(RuntimeError, match="finite"):
+        require_phase_arms(6, ["G5a"], {
+            "G5a": {"curves": {"A": 1.0, "C1": "bad"}}
+        })
+
+
+def test_phase_payload_gate_rejects_a_phase_six_record_with_only_provenance():
+    from spno.evaluation.payloads import require_phase_arms
+
+    with pytest.raises(RuntimeError, match="finite"):
+        require_phase_arms(6, ["G1"], {
+            "G1": {"measurements": {
+                "shift": {
+                    "identifier": "G1-shift",
+                    "potential_family": "cosine",
+                    "note": "missing measurements",
+                }
+            }}
+        })
