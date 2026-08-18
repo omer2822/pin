@@ -235,6 +235,17 @@ class AlphaDerivative:
         }
 
 
+def _strict_alpha_grid(alphas: Iterable[float], *, name: str) -> list[float]:
+    """Materialize and validate the ordered alpha samples used by phase estimators."""
+
+    values = [float(value) for value in alphas]
+    if len(values) < 2 or not all(math.isfinite(value) for value in values):
+        raise ValueError(f"{name} needs at least two finite, strictly increasing alphas")
+    if any(right <= left for left, right in zip(values, values[1:])):
+        raise ValueError(f"{name} alpha grid must be finite and strictly increasing")
+    return values
+
+
 @torch.no_grad()
 def alpha_phase_derivative(
     model,
@@ -266,9 +277,7 @@ def alpha_phase_derivative(
     that, and report it as a different claim.
     """
 
-    values = [float(a) for a in alphas]
-    if len(values) < 2:
-        raise ValueError("alpha_phase_derivative needs at least two alphas")
+    values = _strict_alpha_grid(alphas, name="alpha_phase_derivative")
     gaps = [values[i + 1] - values[i] for i in range(len(values) - 1)]
     max_gap = max(abs(gap) for gap in gaps)
     if not alpha_sampling_is_dense_enough(max_gap, abs(int(wave_number)), float(dt)):
@@ -323,9 +332,7 @@ def omega_by_alpha_continuation(
     extracted.
     """
 
-    values = [float(a) for a in alphas]
-    if len(values) < 2:
-        raise ValueError("omega_by_alpha_continuation needs at least two alphas")
+    values = _strict_alpha_grid(alphas, name="omega_by_alpha_continuation")
     anchor_omega = float(
         exact_dispersion((int(wave_number),), alpha=values[0], beta=beta,
                          amplitude=amplitude, potential_constant=potential_constant)

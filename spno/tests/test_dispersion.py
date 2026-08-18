@@ -269,6 +269,24 @@ def test_the_alpha_derivative_refuses_a_grid_too_coarse_to_be_wrap_free():
         )
 
 
+@pytest.mark.parametrize(
+    "alphas",
+    [[0.7, 0.7], [0.8, 0.7], [0.7, float("nan")], [0.7, float("inf")]],
+)
+def test_alpha_estimators_require_a_finite_strictly_increasing_grid(alphas):
+    """Invalid grids must fail before they can create undefined phase slopes."""
+
+    domain = _domain()
+    kwargs = dict(
+        beta=BETA, amplitude=probe_amplitude(domain, MASS_RANGE),
+        potential_constant=V0, dt=DT,
+    )
+    with pytest.raises(ValueError, match="strictly increasing"):
+        alpha_phase_derivative(
+            SubsteppedReference(domain, 32), domain, 8, alphas=alphas, **kwargs
+        )
+
+
 def test_alpha_continuation_reconstructs_absolute_omega_above_k_wrap():
     """A *different* claim from the derivative: absolute omega, not its slope.
 

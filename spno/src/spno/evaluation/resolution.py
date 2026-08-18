@@ -21,6 +21,12 @@ Tensor = torch.Tensor
 NYQUIST_TOLERANCE = 1e-12
 
 
+def _integer_fft_modes(n: int, device) -> torch.Tensor:
+    """Integer wave numbers in PyTorch's unshifted FFT coefficient ordering."""
+
+    return torch.fft.fftfreq(n, d=1.0 / n, device=device).round().to(torch.int64)
+
+
 def spectral_resample(
     field: Tensor, source: PeriodicDomain, target: PeriodicDomain
 ) -> Tensor:
@@ -47,9 +53,8 @@ def spectral_resample(
         return field.clone()
 
     hat = torch.fft.fftn(field, dim=source.spatial_axes)
-    nyquist_index = n_source // 2
-
-    if n_target > n_source:
+    if n_target > n_source and n_source % 2 == 0:
+        nyquist_index = n_source // 2
         total = torch.abs(hat).pow(2).sum(dim=-1).clamp_min(1e-300)
         at_nyquist = torch.abs(hat[..., nyquist_index]).pow(2)
         if float((at_nyquist / total).max()) > NYQUIST_TOLERANCE:
@@ -60,12 +65,15 @@ def spectral_resample(
                 "Band-limit the field below Nyquist first."
             )
 
-    keep = min(n_source, n_target) // 2
     shape = list(field.shape)
     shape[-1] = n_target
     resampled = torch.zeros(shape, dtype=hat.dtype, device=hat.device)
-    for wave_number in range(-keep + 1, keep):
-        resampled[..., wave_number % n_target] = hat[..., wave_number % n_source]
+    source_modes = _integer_fft_modes(n_source, hat.device)
+    target_modes = _integer_fft_modes(n_target, hat.device)
+    source_index = {int(k): i for i, k in enumerate(source_modes.tolist())}
+    for target_index, wave_number in enumerate(target_modes.tolist()):
+        if wave_number in source_index:
+            resampled[..., target_index] = hat[..., source_index[wave_number]]
 
     resampled = resampled * (n_target / n_source)
     return torch.fft.ifftn(resampled, dim=target.spatial_axes)

@@ -54,6 +54,18 @@ def test_resampling_refuses_a_field_with_energy_at_the_source_nyquist():
         spectral_resample(field, COARSE, FINE)
 
 
+@pytest.mark.parametrize("source_n,target_n,k", [(63, 127, 31), (63, 64, -31), (65, 63, 30)])
+def test_resampling_preserves_valid_odd_grid_endpoint_modes(source_n, target_n, k):
+    """Odd grids have distinct endpoint modes that must survive mode copying."""
+
+    source = PeriodicDomain.periodic_1d(source_n)
+    target = PeriodicDomain.periodic_1d(target_n)
+    field = plane_wave(source, (k,), amplitude=0.7).unsqueeze(0)
+    moved = spectral_resample(field, source, target)
+    expected = plane_wave(target, (k,), amplitude=0.7).unsqueeze(0)
+    assert float(torch.abs(moved - expected).max()) < 1e-12
+
+
 def test_resampling_to_the_same_grid_is_the_identity():
     torch.manual_seed(0)
     field = torch.randn(2, 64, dtype=torch.complex128)
