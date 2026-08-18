@@ -156,6 +156,26 @@ def test_a_negative_gamma_is_loss():
     assert math.log(ratio) / DT == pytest.approx(-4e-3, rel=1e-10)
 
 
+@pytest.mark.parametrize("gamma", [1e-2, -1e-2, 1e-12])
+def test_gain_loss_local_subflow_matches_the_analytic_solution(gamma):
+    domain = PeriodicDomain.periodic_1d(16)
+    field = torch.full((2, 16), 0.7 + 0.2j, dtype=torch.complex128)
+    potential = torch.zeros(2, 16, dtype=torch.float64)
+    alpha = torch.zeros(2, dtype=torch.float64)
+    beta = torch.full((2,), 0.4, dtype=torch.float64)
+
+    out = GainLossSplitStepNLSOperator(domain, gamma=gamma)(
+        field, potential, alpha, beta, DT
+    )
+
+    rho0 = torch.abs(field) ** 2
+    duration = DT if gamma == 0 else math.expm1(2 * gamma * DT) / (2 * gamma)
+    gain = torch.exp(torch.tensor(gamma * DT, dtype=torch.float64))
+    expected = field * gain * torch.exp(1j * beta[:, None] * rho0 * duration)
+
+    assert float(torch.abs(out - expected).max()) < 1e-12
+
+
 def test_a_negative_sigma_is_refused():
     domain = PeriodicDomain.periodic_1d(N)
     with pytest.raises(ValueError, match="non-negative"):
@@ -232,6 +252,25 @@ def test_a_dialled_shard_actually_differs():
         reference=MisspecificationConfig(nonlocal_sigma=0.5).reference(small),
     )
     assert not torch.equal(perturbed.trajectories, baseline.trajectories)
+
+
+def test_misspecified_shard_records_and_validates_reference_provenance():
+    small = replace(DataConfig(), n_test=2, steps=2, grid_size=16)
+    spec = MisspecificationConfig(nonlocal_sigma=0.5)
+    provenance = spec.provenance(small)
+
+    shard = generate_shard(
+        small,
+        "test",
+        reference=spec.reference(small),
+        reference_metadata=provenance,
+    )
+
+    assert shard.metadata["reference"] == provenance
+    assert shard.metadata["reference"] is not provenance
+    assert shard.metadata["reference"]["identifier"] == spec.identifier(small)
+    assert shard.metadata["reference"]["nonlocal_sigma"] == 0.5
+    assert shard.metadata["reference"]["gain_loss_gamma"] == 0.0
 
 
 def test_a_negative_sigma_is_refused_by_the_config():

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Mapping
 
 import torch
 from torch.utils.data import Dataset
@@ -95,6 +95,7 @@ def generate_shard(
     potential_family: str = "random",
     steps: int | None = None,
     reference: "torch.nn.Module | None" = None,
+    reference_metadata: Mapping[str, str | int | float | bool] | None = None,
 ) -> TrajectoryShard:
     """Generate one split.  Deterministic in ``(config.seed, split)``.
 
@@ -103,6 +104,10 @@ def generate_shard(
     shards on disk).  Passing ``None`` builds the standard substepped reference, so
     every existing caller is unaffected and a dial-zero generator reproduces the
     production shards **bitwise**.
+
+    ``reference_metadata`` records the canonical description of an injected reference
+    in the shard itself.  Copying it makes the persisted provenance independent of a
+    caller-owned mapping.
     """
 
     if split not in SPLIT_SEED_OFFSET:
@@ -161,6 +166,29 @@ def generate_shard(
     # Globally unique ids so a leakage check is a set intersection, not a convention.
     ids = torch.arange(n, dtype=torch.int64) + SPLIT_SEED_OFFSET[split]
 
+    metadata = {
+        "grid_size": config.grid_size,
+        "substeps": config.substeps,
+        "steps": steps,
+        "potential_family": potential_family,
+        "initial_bandwidth": config.initial_bandwidth,
+        "seed": config.seed + SPLIT_SEED_OFFSET[split],
+        "mass_min": float(masses.min()),
+        "mass_max": float(masses.max()),
+        "mass_ratio": float(masses.max() / masses.min()),
+        "alpha_min": float(alpha.min()),
+        "alpha_max": float(alpha.max()),
+        "alpha_max_gap": float(torch.diff(alpha.sort().values).max()),
+        "beta_min": float(beta.min()),
+        "beta_max": float(beta.max()),
+        "k_wrap": k_wrap,
+        "cascade_steps": cascade_steps,
+        "cascade_above_k_train": above_train,
+        "cascade_above_k_wrap": above_wrap,
+    }
+    if reference_metadata is not None:
+        metadata["reference"] = dict(reference_metadata)
+
     return TrajectoryShard(
         trajectories=trajectories,
         potential=potential,
@@ -169,26 +197,7 @@ def generate_shard(
         trajectory_ids=ids,
         dt=config.dt,
         split=split,
-        metadata={
-            "grid_size": config.grid_size,
-            "substeps": config.substeps,
-            "steps": steps,
-            "potential_family": potential_family,
-            "initial_bandwidth": config.initial_bandwidth,
-            "seed": config.seed + SPLIT_SEED_OFFSET[split],
-            "mass_min": float(masses.min()),
-            "mass_max": float(masses.max()),
-            "mass_ratio": float(masses.max() / masses.min()),
-            "alpha_min": float(alpha.min()),
-            "alpha_max": float(alpha.max()),
-            "alpha_max_gap": float(torch.diff(alpha.sort().values).max()),
-            "beta_min": float(beta.min()),
-            "beta_max": float(beta.max()),
-            "k_wrap": k_wrap,
-            "cascade_steps": cascade_steps,
-            "cascade_above_k_train": above_train,
-            "cascade_above_k_wrap": above_wrap,
-        },
+        metadata=metadata,
     )
 
 

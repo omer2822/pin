@@ -51,6 +51,17 @@ class MisspecificationConfig:
             return base
         return f"{base}-s{self.nonlocal_sigma:g}-g{self.gain_loss_gamma:g}"
 
+    def provenance(self, data_config: DataConfig) -> dict[str, str | int | float | bool]:
+        """Canonical, serializable description of the reference generator."""
+
+        return {
+            "identifier": self.identifier(data_config),
+            "reference_type": type(self.reference(data_config)).__name__,
+            "nonlocal_sigma": self.nonlocal_sigma,
+            "gain_loss_gamma": self.gain_loss_gamma,
+            "substeps": data_config.substeps,
+        }
+
     def reference(self, data_config: DataConfig) -> nn.Module:
         """The substepped generator carrying this dial.
 

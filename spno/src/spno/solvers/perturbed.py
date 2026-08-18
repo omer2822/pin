@@ -27,6 +27,8 @@ operators branch to :meth:`SplitStepNLSOperator.forward` at zero.
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn as nn
 
@@ -150,13 +152,22 @@ class GainLossSplitStepNLSOperator(SplitStepNLSOperator):
         beta_grid = batch_parameter(beta, field.shape[0], self.domain, field, "beta")
 
         midpoint = self._kinetic(field, alpha_grid, 0.5 * float(dt))
+        gamma_dt = self.gamma * float(dt)
+        if abs(gamma_dt) < 1e-8:
+            nonlinear_duration = float(dt) * (
+                1.0 + gamma_dt + (2.0 / 3.0) * gamma_dt**2
+            )
+        else:
+            nonlinear_duration = math.expm1(2.0 * gamma_dt) / (2.0 * self.gamma)
         local_phase = torch.exp(
-            1j * (beta_grid * torch.abs(midpoint) ** 2 - potential) * float(dt)
+            1j
+            * (
+                beta_grid * torch.abs(midpoint) ** 2 * nonlinear_duration
+                - potential * float(dt)
+            )
         )
         # exp(gamma dt) is real and commutes with the kinetic multiplier: exact.
-        amplified = midpoint * local_phase * torch.exp(
-            torch.tensor(self.gamma * float(dt), dtype=midpoint.real.dtype)
-        )
+        amplified = midpoint * local_phase * math.exp(gamma_dt)
         return self._kinetic(amplified, alpha_grid, 0.5 * float(dt))
 
 
