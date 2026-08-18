@@ -478,17 +478,22 @@ def test_phase_payload_gate_rejects_metadata_only_and_nonfinite_results():
         require_phase_arms(6, ["G1"], {"G1": {"identifier": "shift"}})
     with pytest.raises(RuntimeError, match="finite"):
         require_phase_arms(9, ["sigma"], {
-            "sigma": {"measurements": {"0.0": {"relative_to_A": {"C1": float("nan")}}}}
+            "sigma": {"measurements": {"0.0": {"relative_to_A": {
+                "B-loop": 1.0,
+                "C1": float("nan"),
+                "C2": 1.0,
+                "C3": 1.0,
+            }}}}
         })
 
 
-@pytest.mark.parametrize("invalid", [None, float("nan"), float("inf")])
+@pytest.mark.parametrize("invalid", ["bad", None, float("nan"), float("inf")])
 def test_phase_payload_gate_rejects_invalid_leaf_beside_a_finite_metric(invalid):
     from spno.evaluation.payloads import require_phase_arms
 
     with pytest.raises(RuntimeError, match="finite"):
         require_phase_arms(6, ["G5a"], {
-            "G5a": {"curves": {"A": 1.0, "C1": invalid}}
+            "G5a": {"curves": {"A": {"principal": [1.0, invalid]}}}
         })
 
 
@@ -498,7 +503,10 @@ def test_phase_payload_gate_rejects_invalid_phase_six_model_metric_leaf():
     with pytest.raises(RuntimeError, match="finite"):
         require_phase_arms(6, ["G1"], {
             "G1": {"measurements": {
-                "shift": {"by_model": {"A": 1.0, "C1": float("nan")}}
+                "shift": {"by_model": {
+                    "A": {"one_step_test": 1.0},
+                    "C1": {"one_step_test": float("nan")},
+                }}
             }}
         })
 
@@ -512,18 +520,33 @@ def test_phase_payload_gate_accepts_phase_six_provenance_alongside_metrics():
                 "identifier": "G1-shift",
                 "potential_family": "cosine",
                 "note": "finite rollout metrics",
-                "by_model": {"A": 1.0, "C1": 1.2},
+                "by_model": {
+                    "A": {"one_step_test": 1.0},
+                    "C1": {"one_step_test": 1.2},
+                },
             }
         }}
     })
 
 
-def test_phase_payload_gate_rejects_a_string_inside_a_metric_mapping():
+def test_phase_payload_gate_ignores_g5a_metadata_outside_the_metric_path():
     from spno.evaluation.payloads import require_phase_arms
 
-    with pytest.raises(RuntimeError, match="finite"):
-        require_phase_arms(6, ["G5a"], {
-            "G5a": {"curves": {"A": 1.0, "C1": "bad"}}
+    require_phase_arms(6, ["G5a"], {
+        "G5a": {"curves": {"A": {
+            "principal": [1.0, 2.0],
+            "provenance": "measured by the fixed-alpha probe",
+            "metadata": {"missing": None, "nan": float("nan"), "inf": float("inf")},
+        }}}
+    })
+
+
+def test_phase_payload_gate_reports_a_non_mapping_measurement_record():
+    from spno.evaluation.payloads import require_phase_arms
+
+    with pytest.raises(RuntimeError, match="sigma.*measurements"):
+        require_phase_arms(9, ["sigma"], {
+            "sigma": {"measurements": {"0.0": 1.0}}
         })
 
 
