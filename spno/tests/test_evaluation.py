@@ -501,3 +501,18 @@ def test_phase_payload_gate_rejects_invalid_phase_six_model_metric_leaf():
                 "shift": {"by_model": {"A": 1.0, "C1": float("nan")}}
             }}
         })
+
+
+def test_phase_payload_gate_accepts_phase_six_provenance_alongside_metrics():
+    from spno.evaluation.payloads import require_phase_arms
+
+    require_phase_arms(6, ["G1"], {
+        "G1": {"measurements": {
+            "shift": {
+                "identifier": "G1-shift",
+                "potential_family": "cosine",
+                "note": "finite rollout metrics",
+                "by_model": {"A": 1.0, "C1": 1.2},
+            }
+        }}
+    })

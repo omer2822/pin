@@ -24,17 +24,25 @@ REQUIRED_ARM_KEYS = {
 }
 
 
-def _has_complete_finite_measurements(value) -> bool:
+def _has_complete_finite_measurements(value) -> bool | None:
+    """Return whether a value contains valid metrics, invalid data, or only prose."""
+
     if isinstance(value, bool):
         return False
     if isinstance(value, (int, float)):
         return math.isfinite(float(value))
+    if isinstance(value, str):
+        return None
     if isinstance(value, dict):
-        return bool(value) and all(
-            _has_complete_finite_measurements(item) for item in value.values()
+        children = [_has_complete_finite_measurements(item) for item in value.values()]
+        return bool(value) and any(child is True for child in children) and all(
+            child is not False for child in children
         )
     if isinstance(value, (list, tuple)):
-        return bool(value) and all(_has_complete_finite_measurements(item) for item in value)
+        children = [_has_complete_finite_measurements(item) for item in value]
+        return bool(value) and any(child is True for child in children) and all(
+            child is not False for child in children
+        )
     return False
 
 
