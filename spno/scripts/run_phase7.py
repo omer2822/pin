@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 
 import matplotlib
+import torch
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -32,6 +33,7 @@ import matplotlib.pyplot as plt
 from spno.config import DataConfig, config_hash
 from spno.experiments import (
     budget_warning,
+    converged,
     describe_config,
     evaluate_model,
     load_shards,
@@ -40,13 +42,52 @@ from spno.experiments import (
     save_run,
 )
 from spno.models.fno import FNOStepOperator
-from spno.train import TrainConfig, train_pino
+from spno.train import TrainConfig, field_scale, train_pino
 
 #: Measured in Phase 0 on the production config; the one-step floor for a split step.
 EPS_SPLIT = 6.239e-05
 #: Phase 2-3 Model A, for the reference lines. Budget-bound -- see the payload note.
 MODEL_A_ONE_STEP = 6.94e-04
 MODEL_A_ROLLOUT_100 = 2.77e-02
+
+
+def build_pino_model(
+    data_config: DataConfig, scale: float, seed: int
+) -> FNOStepOperator:
+    """Build the controlled PINO arm for ``seed`` with train-shard normalization."""
+
+    torch.manual_seed(seed)
+    return FNOStepOperator(
+        data_config.domain,
+        modes=16,
+        width=64,
+        n_layers=4,
+        alpha_range=data_config.alpha_range,
+        beta_range=data_config.beta_range,
+        field_scale=scale,
+        trained_dt=data_config.dt,
+    )
+
+
+def aggregate_pino_seed_metrics(per_seed: list[dict]) -> dict:
+    """Aggregate real test metrics, locating horizon 100 by its recorded step."""
+
+    one_step = [entry["metrics"]["one_step_test"] for entry in per_seed]
+    mass_drift_100 = []
+    energy_drift_100 = []
+    for entry in per_seed:
+        rollout = entry["metrics"]["rollout"]
+        horizon_index = rollout["steps"].index(100)
+        mass_drift_100.append(rollout["mass_drift"][horizon_index])
+        energy_drift_100.append(rollout["energy_drift"][horizon_index])
+    return {
+        "one_step_mean": sum(one_step) / len(one_step),
+        "one_step_min": min(one_step),
+        "one_step_max": max(one_step),
+        "mass_drift_100_mean": sum(mass_drift_100) / len(mass_drift_100),
+        "energy_drift_100_mean": sum(energy_drift_100) / len(energy_drift_100),
+        "converged": [entry["converged"] for entry in per_seed],
+    }
 
 
 def make_plots(payload: dict, output) -> None:
@@ -71,9 +112,9 @@ def make_plots(payload: dict, output) -> None:
 
     figure, axes = plt.subplots(1, 3, figsize=(15, 4.5))
     panels = (
-        ("one-step relative L2", lambda e: e.get("one_step")),
-        ("mass drift @100", lambda e: e.get("mass_drift_100")),
-        ("energy drift @100", lambda e: e.get("energy_drift_100")),
+        ("one-step relative L2", lambda e: e.get("one_step_mean")),
+        ("mass drift @100", lambda e: e.get("mass_drift_100_mean")),
+        ("energy drift @100", lambda e: e.get("energy_drift_100_mean")),
     )
     for axis, (title, getter) in zip(axes, panels):
         values = series(getter)
@@ -116,9 +157,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv=None) -> dict:
-    args = parse_args(argv)
-    data_config = DataConfig()
+def run_sweep(shards, data_config: DataConfig, args, *, save=save_run) -> dict:
+    """Run every lambda from the same per-seed initialization and save one payload."""
+
     device = pick_device(args.device)
     epochs = 2 if args.quick else args.epochs
     seeds = args.seeds[:1] if args.quick else args.seeds
@@ -127,8 +168,7 @@ def main(argv=None) -> dict:
     # identifier would scatter it across directories and invite quoting one value.
     identifier = run_identifier(config_hash(data_config), "pino", quick=args.quick)
 
-    shards = load_shards(data_config)
-    domain = data_config.domain
+    scale = field_scale(shards["train"], data_config.domain)
 
     payload: dict = {
         "phase": 7,
@@ -137,6 +177,7 @@ def main(argv=None) -> dict:
         "identifier": identifier,
         "device": device,
         "quick": args.quick,
+        "field_scale": scale,
         "confound": (
             "the Crank-Nicolson residual is itself discretely mass-preserving -- its "
             "exact plane-wave update is the Cayley transform, |z| = 1 identically -- so "
@@ -155,20 +196,21 @@ def main(argv=None) -> dict:
         "sweep": {},
     }
 
-    for physics_weight in args.lambdas:
-        per_seed = []
-        for seed in seeds:
+    by_lambda = {physics_weight: [] for physics_weight in args.lambdas}
+    parameter_count = None
+    for seed in seeds:
+        baseline = build_pino_model(data_config, scale, seed)
+        initial_state = {
+            key: value.detach().clone()
+            for key, value in baseline.state_dict().items()
+        }
+        for physics_weight in args.lambdas:
             train_config = TrainConfig(
                 epochs=epochs, device=device, seed=seed,
                 max_train_pairs=256 if args.quick else None,
             )
-            model = FNOStepOperator(
-                domain,
-                modes=16,
-                alpha_range=data_config.alpha_range,
-                beta_range=data_config.beta_range,
-                trained_dt=data_config.dt,
-            )
+            model = build_pino_model(data_config, scale, seed)
+            model.load_state_dict(initial_state)
             history = train_pino(
                 model,
                 shards["train"],
@@ -179,29 +221,34 @@ def main(argv=None) -> dict:
                 verbose=not args.quick,
             )
             metrics = evaluate_model(model, shards, data_config, train_config)
-            per_seed.append(
+            by_lambda[physics_weight].append(
                 {
                     "seed": seed,
                     "history": history.as_dict(),
                     "metrics": metrics,
+                    "converged": converged(history),
                     "config": describe_config(data_config, train_config),
                 }
             )
+            parameter_count = model.parameter_count()
 
+    for physics_weight, per_seed in by_lambda.items():
         payload["sweep"][str(physics_weight)] = {
             "physics_weight": physics_weight,
             "per_seed": per_seed,
-            "parameter_count": model.parameter_count(),
-            "one_step": sum(s["history"]["best_val"] for s in per_seed) / len(per_seed),
+            "parameter_count": parameter_count,
+            **aggregate_pino_seed_metrics(per_seed),
         }
 
     warning = budget_warning(
-        {key: {"histories": [s["history"] for s in entry["per_seed"]]}
-         for key, entry in payload["sweep"].items()}
+        {
+            key: {"converged": [seed_result["converged"] for seed_result in entry["per_seed"]]}
+            for key, entry in payload["sweep"].items()
+        }
     )
     payload["budget_warning"] = warning
 
-    output = save_run("phase7", identifier, payload)
+    output = save("phase7", identifier, payload)
     make_plots(payload, output)
 
     print(f"{'phase':<22}7a -- PINO discrete midpoint residual")
@@ -211,11 +258,18 @@ def main(argv=None) -> dict:
     print(f"{'lambdas':<22}{' '.join(str(v) for v in args.lambdas)}")
     print(f"{'seeds':<22}{' '.join(str(s) for s in seeds)}  epochs {epochs}")
     for key, entry in payload["sweep"].items():
-        print(f"{'  lambda=' + key:<22}one-step {entry['one_step']:.4e}")
+        print(f"{'  lambda=' + key:<22}one-step {entry['one_step_mean']:.4e}")
     if warning:
         print(f"{'BUDGET BOUND':<22}{warning}")
     print(f"{'written to':<22}{output}")
     return payload
+
+
+def main(argv=None) -> dict:
+    args = parse_args(argv)
+    data_config = DataConfig()
+    shards = load_shards(data_config)
+    return run_sweep(shards, data_config, args)
 
 
 if __name__ == "__main__":

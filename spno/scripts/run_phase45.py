@@ -39,12 +39,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import torch
 
+from spno.checkpoints import CheckpointMetadata, checkpoint_path, save_checkpoint
 from spno.config import DataConfig, config_hash
 from spno.equations.nls import wrap_wavenumber
 from spno.evaluation.conservation import evaluate_conservation
 from spno.evaluation.reversibility import evaluate_reversibility
 from spno.evaluation.spectral import evaluate_spectral
 from spno.experiments import (
+    RESULTS_ROOT,
     arithmetic_mass_floor,
     budget_warning,
     converged,
@@ -165,7 +167,20 @@ def assert_untrained_guarantees(models: dict, data_config: DataConfig) -> dict:
     return report
 
 
-def run_seed(seed, shards, data_config, train_config, scale, kinetic, mode, local="L0") -> dict:
+def run_seed(
+    seed,
+    shards,
+    data_config,
+    train_config,
+    scale,
+    kinetic,
+    mode,
+    local="L0",
+    *,
+    identifier: str,
+    quick: bool = False,
+    checkpoint_root=RESULTS_ROOT,
+) -> dict:
     domain = data_config.domain
     results = {}
     for name, model in build_models(data_config, scale, seed, kinetic, local).items():
@@ -179,6 +194,44 @@ def run_seed(seed, shards, data_config, train_config, scale, kinetic, mode, loca
         )
         entry["history"] = history.as_dict()
         entry["converged"] = converged(history)
+
+        actual_local = "L0" if (
+            local == "L1" and name == "C2"
+        ) else (None if name == "C3" else local)
+        architecture = {
+            "kinetic_mode": kinetic,
+            "local_mode": actual_local,
+        }
+        if name in ("A", "B-loop"):
+            architecture.update(
+                modes=16,
+                width=64,
+                n_layers=4,
+                use_coordinate_channel=False,
+            )
+            if name == "B-loop":
+                architecture["projection"] = "mass"
+        elif name == "C1":
+            architecture["width"] = 32
+        elif name in ("C2", "C3"):
+            architecture.update(modes=16, width=64, n_layers=4)
+
+        save_checkpoint(
+            checkpoint_path(checkpoint_root, "phase45", identifier, name, seed),
+            model,
+            CheckpointMetadata(
+                schema_version=1,
+                model_name=name,
+                data_hash=config_hash(data_config),
+                seed=seed,
+                train_mode=mode,
+                field_scale=scale,
+                trained_dt=data_config.dt,
+                architecture=architecture,
+                converged=False if quick else converged(history),
+                best_epoch=history.best_epoch,
+            ),
+        )
 
         widened = widen_to_double(model, device="cpu").eval()
         inputs = rollout_inputs(shards["test"], data_config, "cpu", n=64, dtype=torch.complex128)
@@ -330,9 +383,24 @@ def main() -> dict:
               + (f"   reversibility {entry.get('reversibility_regime')}"
                  f" (order {entry.get('reversibility_order')})" if name.startswith("C") else ""))
 
+    identifier = run_identifier(
+        config_hash(data_config),
+        args.mode,
+        f"{args.kinetic}{args.local}",
+        quick=args.quick,
+    )
     per_seed = {
         seed: run_seed(
-            seed, shards, data_config, train_config, scale, args.kinetic, args.mode, args.local
+            seed,
+            shards,
+            data_config,
+            train_config,
+            scale,
+            args.kinetic,
+            args.mode,
+            args.local,
+            identifier=identifier,
+            quick=args.quick,
         )
         for seed in seeds
     }
@@ -350,12 +418,6 @@ def main() -> dict:
         "summary": summary,
         "per_seed": per_seed,
     }
-    identifier = run_identifier(
-        config_hash(data_config),
-        args.mode,
-        f"{args.kinetic}{args.local}",
-        quick=args.quick,
-    )
     output = save_run("phase45", identifier, payload)
     make_plots(summary, payload, output)
 

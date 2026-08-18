@@ -34,8 +34,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import torch
 
+from spno.checkpoints import CheckpointMetadata, checkpoint_path, save_checkpoint
 from spno.config import DataConfig, config_hash
 from spno.experiments import (
+    RESULTS_ROOT,
     budget_warning,
     converged,
     describe_config,
@@ -68,7 +70,15 @@ def build_fno(data_config: DataConfig, scale: float, seed: int) -> FNOStepOperat
 
 
 def run_seed(
-    seed: int, shards, data_config: DataConfig, train_config: TrainConfig, scale: float
+    seed: int,
+    shards,
+    data_config: DataConfig,
+    train_config: TrainConfig,
+    scale: float,
+    *,
+    identifier: str,
+    quick: bool = False,
+    checkpoint_root=RESULTS_ROOT,
 ) -> dict:
     config = dataclasses.replace(train_config, seed=seed)
     results = {}
@@ -78,11 +88,35 @@ def run_seed(
     history_a = train_one_step(
         model_a, shards["train"], shards["val"], data_config, config
     )
+    evaluated_a = evaluate_model(
+        model_a, shards, data_config, config, checkpoints=CHECKPOINTS
+    )
     results["A"] = {
-        **evaluate_model(model_a, shards, data_config, config, checkpoints=CHECKPOINTS),
+        **evaluated_a,
         "history": history_a.as_dict(),
         "converged": converged(history_a),
     }
+    save_checkpoint(
+        checkpoint_path(checkpoint_root, "phase23", identifier, "A", seed),
+        model_a,
+        CheckpointMetadata(
+            schema_version=1,
+            model_name="A",
+            data_hash=config_hash(data_config),
+            seed=seed,
+            train_mode="one-step",
+            field_scale=scale,
+            trained_dt=data_config.dt,
+            architecture={
+                "modes": 16,
+                "width": 64,
+                "n_layers": 4,
+                "use_coordinate_channel": False,
+            },
+            converged=False if quick else converged(history_a),
+            best_epoch=history_a.best_epoch,
+        ),
+    )
 
     print(f"--- seed {seed}: Model B-post (projection at evaluation only) ---")
     # Same weights as A: isolates the projection itself, with zero training difference.
@@ -102,13 +136,36 @@ def run_seed(
     history_b = train_one_step(
         model_b_loop, shards["train"], shards["val"], data_config, config
     )
+    evaluated_b = evaluate_model(
+        model_b_loop, shards, data_config, config, checkpoints=CHECKPOINTS
+    )
     results["B-loop"] = {
-        **evaluate_model(
-            model_b_loop, shards, data_config, config, checkpoints=CHECKPOINTS
-        ),
+        **evaluated_b,
         "history": history_b.as_dict(),
         "converged": converged(history_b),
     }
+    save_checkpoint(
+        checkpoint_path(checkpoint_root, "phase23", identifier, "B-loop", seed),
+        model_b_loop,
+        CheckpointMetadata(
+            schema_version=1,
+            model_name="B-loop",
+            data_hash=config_hash(data_config),
+            seed=seed,
+            train_mode="one-step",
+            field_scale=scale,
+            trained_dt=data_config.dt,
+            architecture={
+                "modes": 16,
+                "width": 64,
+                "n_layers": 4,
+                "use_coordinate_channel": False,
+                "projection": "mass",
+            },
+            converged=False if quick else converged(history_b),
+            best_epoch=history_b.best_epoch,
+        ),
+    )
     return results
 
 
@@ -225,8 +282,18 @@ def main() -> dict:
     scale = field_scale(shards["train"], data_config.domain)
     print(f"device={device}  field_scale={scale:.4f}  seeds={seeds}")
 
+    identifier = run_identifier(config_hash(data_config), quick=args.quick)
     per_seed = {
-        seed: run_seed(seed, shards, data_config, train_config, scale) for seed in seeds
+        seed: run_seed(
+            seed,
+            shards,
+            data_config,
+            train_config,
+            scale,
+            identifier=identifier,
+            quick=args.quick,
+        )
+        for seed in seeds
     }
     summary = aggregate(per_seed)
 
@@ -239,7 +306,6 @@ def main() -> dict:
         "summary": summary,
         "per_seed": per_seed,
     }
-    identifier = run_identifier(config_hash(data_config), quick=args.quick)
     output = save_run("phase23", identifier, payload)
     make_plots(per_seed, summary, payload, output)
 
