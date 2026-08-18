@@ -480,3 +480,24 @@ def test_phase_payload_gate_rejects_metadata_only_and_nonfinite_results():
         require_phase_arms(9, ["sigma"], {
             "sigma": {"measurements": {"0.0": {"relative_to_A": {"C1": float("nan")}}}}
         })
+
+
+@pytest.mark.parametrize("invalid", [None, float("nan"), float("inf")])
+def test_phase_payload_gate_rejects_invalid_leaf_beside_a_finite_metric(invalid):
+    from spno.evaluation.payloads import require_phase_arms
+
+    with pytest.raises(RuntimeError, match="finite"):
+        require_phase_arms(6, ["G5a"], {
+            "G5a": {"curves": {"A": 1.0, "C1": invalid}}
+        })
+
+
+def test_phase_payload_gate_rejects_invalid_phase_six_model_metric_leaf():
+    from spno.evaluation.payloads import require_phase_arms
+
+    with pytest.raises(RuntimeError, match="finite"):
+        require_phase_arms(6, ["G1"], {
+            "G1": {"measurements": {
+                "shift": {"by_model": {"A": 1.0, "C1": float("nan")}}
+            }}
+        })
