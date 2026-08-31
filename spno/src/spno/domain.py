@@ -7,10 +7,18 @@ incompressible-flow and density helpers stay behind in the tutorial.
 
 Everything here is grid-resolution agnostic in the sense that it derives its wave
 vectors from the domain, so the same code serves N=64 and N=128 unchanged.
+
+``MeasureSpace -> HilbertSpace -> SpectralDomain`` is the generalisation hierarchy
+from the Phase 1 domain-abstraction review (Candidate B), built per ADR 0002 on
+explicit request -- see that ADR for why this supersedes ADR 0001's "not yet".
+``PeriodicDomain`` is the sole concrete implementer; it keeps its existing name,
+module path and full public API unchanged (constraint 4), and gains the hierarchy
+as additional base classes plus additional methods, not replacements.
 """
 
 from __future__ import annotations
 
+import abc
 from dataclasses import dataclass
 import math
 
@@ -19,15 +27,150 @@ import torch
 Tensor = torch.Tensor
 
 
+def _as_grid_size(n: object) -> int:
+    """Coerce a grid-size entry to ``int``, integrally.
+
+    ``bool`` is rejected explicitly even though it subclasses ``int`` (``True`` would
+    otherwise silently yield a one-point grid).  Anything else with a lossless
+    ``__index__`` -- ``numpy.int64`` included -- is accepted, so array libraries that
+    hand back their own integer scalar types do not need an explicit ``int(...)`` cast
+    at the call site.
+    """
+
+    if isinstance(n, bool):
+        raise ValueError(f"every grid size must be a positive integer; got bool {n!r}")
+    if isinstance(n, int):
+        return n
+    index = getattr(n, "__index__", None)
+    if index is None:
+        raise ValueError(f"every grid size must be a positive integer; got {n!r}")
+    return index()
+
+
+class MeasureSpace(abc.ABC):
+    """A discrete set of points with a quadrature rule. Tensor-free by contract.
+
+    ``shape`` is declared as a plain annotation, not an ``@property``: a dataclass
+    field of the same name in a concrete subclass has no class-level descriptor to
+    override, so making this an ``@abc.abstractmethod`` property would make every
+    such subclass permanently non-instantiable (the field shadows nothing, and the
+    base class's abstract property survives the MRO lookup). See ADR 0002.
+
+    Nothing here is cached: every space in this project derives its geometry per call
+    with explicit ``device``/``dtype`` keywords (constraint 2 of the Phase 1 review),
+    so the same space serves float32 training and float64 invariant evaluation
+    without ever building a stale buffer.
+    """
+
+    shape: tuple[int, ...]
+
+    @property
+    def dim(self) -> int:
+        return len(self.shape)
+
+    @property
+    def spatial_axes(self) -> tuple[int, ...]:
+        return tuple(range(-self.dim, 0))
+
+    @abc.abstractmethod
+    def validate_field(self, field: Tensor) -> None:
+        """Raise ``ValueError`` unless ``field`` ends in this space's spatial shape."""
+
+    @abc.abstractmethod
+    def quadrature_weights(
+        self,
+        *,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype = torch.float64,
+    ) -> Tensor:
+        """Per-point quadrature weight(s) for :meth:`integrate`, derived per call."""
+
+    def integrate(self, density: Tensor) -> Tensor:
+        """Spatial integral of ``density`` against this space's quadrature rule.
+
+        Retains any leading batch axes, exactly as :func:`l2_mass` does for the
+        special case ``density = |field|**2``.
+        """
+
+        self.validate_field(density)
+        weights = self.quadrature_weights(
+            device=density.device, dtype=density.real.dtype
+        )
+        return torch.sum(density * weights, dim=self.spatial_axes)
+
+
+class HilbertSpace(MeasureSpace):
+    """A measure space with the L^2 inner product ``SPNO-Mathematics.tex`` writes."""
+
+    def inner(self, u: Tensor, v: Tensor) -> Tensor:
+        return self.integrate(u.conj() * v)
+
+    def norm(self, u: Tensor) -> Tensor:
+        return torch.sqrt(self.inner(u, u).real)
+
+    # Deliberately NOT `project`.  project_to_mass (module-level, below) is a
+    # nonlinear radial rescale onto a fixed-mass sphere, not a linear projection --
+    # renaming it into this vocabulary would launder that away (constraint 6 / ADR
+    # 0001's dissent, preserved by ADR 0002).
+
+
+class SpectralDomain(HilbertSpace):
+    """A Hilbert space with a spectral basis: analysis/synthesis plus the elementwise
+    multipliers that make differentiation and the Laplacian algebraic in that basis.
+    """
+
+    @abc.abstractmethod
+    def analyze(self, field: Tensor) -> Tensor:
+        """Field -> spectral coefficients."""
+
+    @abc.abstractmethod
+    def synthesize(self, coefficients: Tensor) -> Tensor:
+        """Spectral coefficients -> field.
+
+        Leaves realness casting to the caller, exactly as the module-level
+        :func:`spectral_gradient` and :func:`spectral_laplacian` always have --
+        ``torch.fft.ifftn`` returns a complex tensor regardless of input dtype.
+        """
+
+    @abc.abstractmethod
+    def laplacian_multiplier(
+        self,
+        *,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype = torch.float64,
+    ) -> Tensor:
+        """The elementwise multiplier ``m`` such that ``synthesize(m * analyze(u))``
+        is the Laplacian of ``u``."""
+
+    @abc.abstractmethod
+    def derivative_multiplier(
+        self,
+        axis: int,
+        *,
+        real_field: bool,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype = torch.float64,
+    ) -> Tensor:
+        """The elementwise multiplier for the first derivative along ``axis``.
+
+        Trap A lives here (its public, named, tested home per ADR 0002): a real
+        field's Nyquist mode on an even grid is self-conjugate and has no signed
+        first derivative, so ``real_field=True`` zeroes it; ``real_field=False``
+        keeps the full signed Fourier convention.
+        """
+
+
 @dataclass(frozen=True)
-class PeriodicDomain:
+class PeriodicDomain(SpectralDomain):
     """Uniform endpoint-free rectangular periodic grid in any dimension."""
 
     shape: tuple[int, ...]
     lengths: tuple[float, ...]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "shape", tuple(self.shape))
+        object.__setattr__(
+            self, "shape", tuple(_as_grid_size(n) for n in self.shape)
+        )
         object.__setattr__(self, "lengths", tuple(float(v) for v in self.lengths))
         if not self.shape:
             raise ValueError("shape must contain at least one spatial dimension")
@@ -55,6 +198,12 @@ class PeriodicDomain:
     @property
     def cell_volume(self) -> float:
         return math.prod(self.spacing)
+
+    @property
+    def volume(self) -> float:
+        """Total measure of the domain: the ``|Omega|`` that normalises a mass density."""
+
+        return math.prod(self.lengths)
 
     @property
     def spatial_axes(self) -> tuple[int, ...]:
@@ -109,40 +258,69 @@ class PeriodicDomain:
                 f"field must have exactly one leading batch axis; got {tuple(field.shape)}"
             )
 
+    # -- SpectralDomain / HilbertSpace / MeasureSpace -----------------------------
 
-def _first_derivative_wave_vectors(
-    field: Tensor, domain: PeriodicDomain
-) -> tuple[Tensor, ...]:
-    """Wave vectors compatible with real fields on even-sized grids.
+    def quadrature_weights(
+        self,
+        *,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype = torch.float64,
+    ) -> Tensor:
+        """Uniform grid: every point carries the same weight, the cell volume."""
 
-    A real grid's Nyquist mode is self-conjugate and therefore has no signed first
-    derivative.  Zeroing that component preserves Hermitian symmetry; complex fields
-    retain the full signed Fourier convention.
-    """
+        return torch.as_tensor(self.cell_volume, device=device, dtype=dtype)
 
-    wave_vectors = list(domain.wave_vectors(device=field.device, dtype=field.real.dtype))
-    if field.is_complex():
-        return tuple(wave_vectors)
-    for axis, n in enumerate(domain.shape):
-        if n % 2 == 0:
-            index = [slice(None)] * domain.dim
+    def analyze(self, field: Tensor) -> Tensor:
+        return torch.fft.fftn(field, dim=self.spatial_axes)
+
+    def synthesize(self, coefficients: Tensor) -> Tensor:
+        return torch.fft.ifftn(coefficients, dim=self.spatial_axes)
+
+    def laplacian_multiplier(
+        self,
+        *,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype = torch.float64,
+    ) -> Tensor:
+        return -self.wave_number_squared(device=device, dtype=dtype)
+
+    def derivative_multiplier(
+        self,
+        axis: int,
+        *,
+        real_field: bool,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype = torch.float64,
+    ) -> Tensor:
+        k = self.wave_vectors(device=device, dtype=dtype)[axis]
+        n = self.shape[axis]
+        if real_field and n % 2 == 0:
+            k = k.clone()
+            index = [slice(None)] * self.dim
             index[axis] = n // 2
-            wave_vectors[axis] = wave_vectors[axis].clone()
-            wave_vectors[axis][tuple(index)] = 0
-    return tuple(wave_vectors)
+            k[tuple(index)] = 0
+        return 1j * k
 
 
 def spectral_gradient(field: Tensor, domain: PeriodicDomain) -> Tensor:
     """FFT gradient, exact for modes represented on the periodic grid."""
 
     domain.validate_field(field)
-    transformed = torch.fft.fftn(field, dim=domain.spatial_axes)
-    wave_vectors = _first_derivative_wave_vectors(field, domain)
+    transformed = domain.analyze(field)
+    real_field = not field.is_complex()
     derivatives = [
-        torch.fft.ifftn(1j * k * transformed, dim=domain.spatial_axes)
-        for k in wave_vectors
+        domain.synthesize(
+            domain.derivative_multiplier(
+                axis,
+                real_field=real_field,
+                device=field.device,
+                dtype=field.real.dtype,
+            )
+            * transformed
+        )
+        for axis in range(domain.dim)
     ]
-    if not field.is_complex():
+    if real_field:
         derivatives = [value.real for value in derivatives]
     component_axis = field.ndim - domain.dim
     return torch.stack(derivatives, dim=component_axis)
@@ -152,11 +330,9 @@ def spectral_laplacian(field: Tensor, domain: PeriodicDomain) -> Tensor:
     """FFT Laplacian using the multiplier ``-|k|^2``."""
 
     domain.validate_field(field)
-    transformed = torch.fft.fftn(field, dim=domain.spatial_axes)
-    k_squared = domain.wave_number_squared(
-        device=field.device, dtype=field.real.dtype
-    )
-    result = torch.fft.ifftn(-k_squared * transformed, dim=domain.spatial_axes)
+    transformed = domain.analyze(field)
+    multiplier = domain.laplacian_multiplier(device=field.device, dtype=field.real.dtype)
+    result = domain.synthesize(multiplier * transformed)
     return result if field.is_complex() else result.real
 
 
@@ -170,41 +346,23 @@ def l2_mass(field: Tensor, domain: PeriodicDomain) -> Tensor:
 
 
 def spatial_broadcast(values: Tensor, domain: PeriodicDomain) -> Tensor:
-    """Append singleton spatial axes so per-sample scalars broadcast over the grid."""
+    """Append singleton spatial axes so per-sample scalars broadcast over the grid.
 
-    return values.reshape(*values.shape, *((1,) * domain.dim))
-
-
-def batch_parameter(
-    value: Tensor | float,
-    batch: int,
-    domain: PeriodicDomain,
-    reference: Tensor,
-    name: str,
-) -> Tensor:
-    """Normalize a scalar-or-per-sample PDE parameter to a grid-broadcastable tensor.
-
-    Rejects a silent precision downcast.  ``torch.tensor([0.9])`` is float32, and
-    feeding it to a float64 field costs ~2.6e-8 in alpha -- enough to move the
-    one-step phase at k=30 by 5e-7 and to invalidate every 1e-10 assertion in the
-    Phase 0 suite.  Pass a python float or an explicitly-typed tensor instead.
+    ``values`` must carry **no** spatial axes -- it is a per-sample (or per-sample,
+    per-frame) scalar.  Passing a grid-shaped tensor would silently produce a
+    rank-inflated result that broadcasts to ``(batch, *shape, *shape)``.
     """
 
-    if isinstance(value, Tensor) and value.is_floating_point():
-        target_dtype = reference.real.dtype
-        if torch.finfo(value.dtype).bits < torch.finfo(target_dtype).bits:
-            raise ValueError(
-                f"{name} is {value.dtype} but the field is {target_dtype}; this would "
-                f"silently lose precision. Pass a python float or a {target_dtype} tensor."
-            )
-    tensor = torch.as_tensor(
-        value, device=reference.device, dtype=reference.real.dtype
-    )
-    if tensor.ndim == 0:
-        tensor = tensor.expand(batch)
-    if tensor.shape != (batch,):
-        raise ValueError(f"{name} must be scalar or have shape (batch,)")
-    return tensor.reshape(batch, *((1,) * domain.dim))
+    if (
+        math.prod(domain.shape) > 1
+        and values.ndim >= domain.dim
+        and tuple(values.shape[-domain.dim :]) == domain.shape
+    ):
+        raise ValueError(
+            f"values must not carry spatial axes; got {tuple(values.shape)}, which "
+            f"already ends in the spatial shape {domain.shape}"
+        )
+    return values.reshape(*values.shape, *((1,) * domain.dim))
 
 
 def project_to_mass(
@@ -217,7 +375,8 @@ def project_to_mass(
     """Rescale each predicted field to the corresponding reference mass.
 
     This is Model B's entire physics content: it enforces one scalar invariant and
-    says nothing about phase, energy, or reversibility.
+    says nothing about phase, energy, or reversibility.  Not a ``HilbertSpace``
+    method: see the note on :class:`HilbertSpace`.
     """
 
     domain.validate_field(prediction)
@@ -228,9 +387,17 @@ def project_to_mass(
     reference_mass = l2_mass(reference, domain)
     if torch.any((predicted_mass <= eps) & (reference_mass > eps)):
         raise ValueError("cannot project a zero field to positive mass")
+    safe_reference = torch.where(
+        reference_mass <= eps, torch.ones_like(reference_mass), reference_mass
+    )
     scale = torch.where(
         reference_mass <= eps,
         torch.zeros_like(reference_mass),
-        torch.sqrt(reference_mass / torch.clamp(predicted_mass, min=eps)),
+        torch.sqrt(safe_reference / torch.clamp(predicted_mass, min=eps)),
     )
     return prediction * spatial_broadcast(scale, domain)
+
+
+# Historical home: batch_parameter is precision policy, not geometry -- it now
+# lives in .precision, re-exported here so no importer's path has to change.
+from .precision import batch_parameter as batch_parameter  # noqa: E402

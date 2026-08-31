@@ -56,7 +56,7 @@ def probe_amplitude(domain: PeriodicDomain, mass_range: tuple[float, float]) -> 
     """
 
     centre = 0.5 * (float(mass_range[0]) + float(mass_range[1]))
-    return math.sqrt(centre / math.prod(domain.lengths))
+    return math.sqrt(centre / domain.volume)
 
 
 def mode_index(wave_number: int, domain: PeriodicDomain) -> int:

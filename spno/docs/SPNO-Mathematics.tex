@@ -1,0 +1,2234 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{mathpazo}
+\usepackage[scaled=0.85]{helvet}
+\renewcommand{\ttdefault}{cmtt}
+\usepackage{microtype}
+\usepackage[margin=1.05in,top=1.1in,bottom=1.15in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage[hidelinks,colorlinks=true,linkcolor=linknavy,citecolor=linknavy,urlcolor=linknavy]{hyperref}
+
+\definecolor{linknavy}{HTML}{1F3A63}
+\definecolor{rulegray}{HTML}{888888}
+\definecolor{boxbg}{HTML}{F4F2ED}
+
+% ---------------------------------------------------------------- theorem envs
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{guarantee}[theorem]{Architectural guarantee}
+\newtheorem{observation}[theorem]{Numerical observation}
+
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+\newtheorem{trap}[theorem]{Trap}
+
+\renewcommand{\qedsymbol}{$\blacksquare$}
+
+% ---------------------------------------------------------------- section look
+\titleformat{\section}{\normalfont\Large\bfseries}{\thesection}{0.8em}{}
+\titleformat{\subsection}{\normalfont\large\bfseries}{\thesubsection}{0.7em}{}
+\titleformat{\subsubsection}{\normalfont\bfseries}{\thesubsubsection}{0.6em}{}
+\titlespacing*{\section}{0pt}{2.4ex plus 1ex minus .2ex}{1.4ex plus .2ex}
+
+% ---------------------------------------------------------------- macros
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\T}{\mathbb{T}}
+\newcommand{\iu}{\mathrm{i}}
+\newcommand{\eu}{\mathrm{e}}
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\lap}{\Delta}
+\newcommand{\psih}{\hat{\psi}}
+\newcommand{\dt}{\Delta t}
+\newcommand{\half}{\tfrac{1}{2}}
+\newcommand{\kwrap}{k_{\mathrm{wrap}}}
+\newcommand{\ktrain}{k_{\mathrm{train}}}
+\newcommand{\knyq}{k_{\mathrm{Nyq}}}
+\newcommand{\epssplit}{\varepsilon_{\mathrm{split}}}
+\newcommand{\Kop}{\mathcal{K}}
+\newcommand{\Nop}{\mathcal{N}}
+\newcommand{\Flow}{\Phi}
+\newcommand{\Ham}{\mathcal{H}}
+\newcommand{\Mass}{\mathcal{M}}
+\newcommand{\Mom}{\mathcal{P}}
+\newcommand{\code}[1]{\texttt{\small #1}}
+\newcommand{\src}[1]{{\color{linknavy}\texttt{\footnotesize #1}}}
+\DeclareMathOperator{\Imag}{Im}
+\DeclareMathOperator{\Real}{Re}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator{\Id}{Id}
+\DeclareMathOperator{\wrap}{wrap}
+
+\newcommand{\sourcenote}[1]{%
+  \par\vspace{0.35em}\noindent
+  {\footnotesize\color{rulegray}\rule{\linewidth}{0.4pt}\\[0.25em]
+  \textsc{in code:} \src{#1}}\par\vspace{0.5em}}
+
+\setlength{\parskip}{0.35em}
+\setlength{\parindent}{0pt}
+\begin{document}
+
+\begin{titlepage}
+\centering
+\vspace*{2.2cm}
+
+{\Large\scshape The Mathematics of SPNO}\\[0.9em]
+
+{\LARGE\bfseries Spectral Identifiability and\\[0.25em]
+Structure-Preserving Neural Operators\\[0.35em]
+for the Parametric Nonlinear Schr\"odinger Equation}\\[2.2em]
+
+{\large A derivation-level reference for the ten-phase study}\\[0.6em]
+{\normalsize organised by subject, with a phase map in \S\ref{sec:phasemap}}\\[3.2em]
+
+\begin{minipage}{0.82\textwidth}\small
+Every claim in this document is labelled by \emph{kind}, following the house rule of the
+project: a \textbf{Theorem} or \textbf{Proposition} is a mathematical statement with a
+proof; an \textbf{Architectural guarantee} holds for every parameter value $\theta$,
+untrained weights included, and is asserted in the test suite at random initialisation;
+a \textbf{Numerical observation} is something that was measured and could have come out
+otherwise. The distinction is load-bearing. ``Conserves energy'' is never written where
+the truth is ``phase-only substeps preserve the discrete $L^2$ norm by construction, and
+Hamiltonian agreement is empirical.''
+
+\vspace{0.9em}
+Numerical constants quoted in the text are the measured values from configuration hash
+\code{bd4e108527} ($N=64$, $\dt=0.01$, $M=32$ substeps) unless stated otherwise, and are
+collected in \S\ref{sec:constants}.
+\end{minipage}
+
+\vfill
+{\small Generated from the \code{spno} source tree \textemdash{} \today}
+\end{titlepage}
+
+\pagenumbering{roman}
+\tableofcontents
+\newpage
+\pagenumbering{arabic}
+
+\section*{How to read this}
+\addcontentsline{toc}{section}{How to read this}
+
+The study asks one question: \emph{does encoding physical structure directly in a neural
+operator's architecture beat an unconstrained baseline, or softer alternatives?} Four
+ways of using physics are kept rigorously distinct, because they have different
+mathematical status:
+
+\begin{center}
+\begin{tabular}{@{}p{0.26\linewidth}p{0.68\linewidth}@{}}
+\toprule
+\textbf{nothing} & Model A, a plain FNO. No invariant is preserved; \S\ref{sec:fno}.\\
+\textbf{constraint projection} & Model B, FNO composed with a metric projection onto the
+mass sphere. One scalar invariant, exactly; \S\ref{sec:projection}.\\
+\textbf{soft physics loss} & Model P (PINO), a Crank--Nicolson residual penalty. Nothing
+is guaranteed --- and the residual itself smuggles in mass conservation;
+\S\ref{sec:pino}.\\
+\textbf{architecture} & Models C1/C2/C3, learned split-step operators. Mass,
+reversibility, symplecticity and $U(1)$ equivariance hold by construction;
+\S\ref{sec:learnedsplit}.\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Part~I builds the continuum and discrete theory the whole project rests on. Part~II
+derives what each model class guarantees and, equally important, what it does not.
+Part~III is the identifiability theory --- the thesis spine --- which is where the only
+genuinely \emph{negative} theorem lives. Part~IV covers the baselines and the two
+misspecification dials that turn ``structure beats FNO'' from a tautology into a
+question. Part~V collects measurement machinery and the phase map.
+
+Sections are cross-referenced to the source file that implements them, in a rule like
+this one:
+
+\sourcenote{src/spno/equations/nls.py}
+
+\newpage
+\part*{Part I \quad Foundations}
+\addcontentsline{toc}{part}{Part I \; Foundations}
+\section{The equation, its Hamiltonian structure, and its invariants}
+\label{sec:equation}
+
+\subsection{Statement and sign conventions}
+
+The object of study is the \emph{parametric} nonlinear Schr\"odinger equation on the
+periodic box $\T^d = [0,2\pi)^d$ (in practice $d=1$):
+\begin{equation}
+\label{eq:nls}
+\boxed{\;\iu\,\psi_t \;+\; \alpha\,\lap\psi \;+\; \beta\,|\psi|^2\psi \;-\; V(x)\,\psi \;=\; 0\;}
+\qquad \psi(\cdot,t):\T^d\to\C,\quad V:\T^d\to\R .
+\end{equation}
+Equivalently, solved for the time derivative,
+\begin{equation}
+\label{eq:nls-evol}
+\psi_t \;=\; \iu\bigl(\alpha\lap\psi + \beta|\psi|^2\psi - V\psi\bigr).
+\end{equation}
+The parameters $(\alpha,\beta)$ are drawn per sample; $\alpha>0$ throughout, and
+$\beta$ takes either sign (focusing $\beta>0$, defocusing $\beta<0$). The learning
+target is the one-step solution operator
+\[
+\Flow_{\dt}:\;(\psi_n,\,V,\,\alpha,\,\beta)\;\longmapsto\;\psi_{n+1}\;=\;\psi(\cdot,t_n+\dt).
+\]
+
+Three sign conventions follow from \eqref{eq:nls-evol} and are used without further
+comment. They are stated here because a single flipped sign invalidates every
+downstream number, and each has been pinned by a test rather than by a comment.
+
+\begin{enumerate}[leftmargin=1.4em,itemsep=0.25em]
+\item \textbf{Kinetic Fourier multiplier} $\eu^{-\iu\alpha|k|^2\tau}$.
+\item \textbf{Local physical-space phase} $\eu^{+\iu(\beta|\psi|^2 - V)\tau}$.
+\item \textbf{Plane-wave dispersion} $\omega = \alpha|k|^2 - \beta|A|^2 + V_0$.
+\end{enumerate}
+
+\subsection{Hamiltonian structure}
+
+\begin{definition}[Energy]
+\label{def:hamiltonian}
+\[
+\Ham[\psi] \;=\; \int_{\T^d}\Bigl(\alpha\,|\nabla\psi|^2 \;+\; V\,|\psi|^2 \;-\; \tfrac{\beta}{2}\,|\psi|^4\Bigr)\dd x .
+\]
+\end{definition}
+
+Treating $\psi$ and $\bar\psi$ as independent, \eqref{eq:nls} is the Hamiltonian system
+\begin{equation}
+\label{eq:hamform}
+\iu\,\psi_t \;=\; \frac{\delta\Ham}{\delta\bar\psi}.
+\end{equation}
+
+\begin{proposition}
+\label{prop:hamform}
+Definition~\ref{def:hamiltonian} generates \eqref{eq:nls} through \eqref{eq:hamform}.
+\end{proposition}
+
+\begin{proof}
+Write $\Ham = \int \alpha\,\nabla\psi\cdot\nabla\bar\psi + V\psi\bar\psi - \tfrac{\beta}{2}(\psi\bar\psi)^2$.
+Varying in $\bar\psi$ and integrating the gradient term by parts (no boundary term, the
+domain is periodic),
+\[
+\frac{\delta\Ham}{\delta\bar\psi} \;=\; -\alpha\lap\psi \;+\; V\psi \;-\; \beta|\psi|^2\psi .
+\]
+Substituting into \eqref{eq:hamform} gives $\iu\psi_t + \alpha\lap\psi + \beta|\psi|^2\psi - V\psi = 0$,
+which is \eqref{eq:nls}.
+\end{proof}
+
+\begin{remark}
+The sign of the quartic term in $\Ham$ is fixed by this computation and is easy to get
+wrong: $-\tfrac{\beta}{2}|\psi|^4$, \emph{not} $+$. The implementation writes the energy
+density as $\alpha|\nabla\psi|^2 + V\rho - \tfrac{\beta}{2}\rho^2$ with $\rho=|\psi|^2$.
+\end{remark}
+
+\subsection{The two conserved quantities}
+
+\begin{definition}[Mass and momentum]
+\[
+\Mass[\psi] \;=\; \int_{\T^d}|\psi|^2\dd x,
+\qquad
+\Mom[\psi] \;=\; \Imag\int_{\T^d}\bar\psi\,\nabla\psi\dd x .
+\]
+\end{definition}
+
+\begin{theorem}[Mass conservation, via Noether]
+\label{thm:mass}
+$\Ham$ is invariant under the global gauge rotation $\psi\mapsto \eu^{\iu c}\psi$,
+$c\in\R$. Consequently $\Mass$ is conserved along solutions of \eqref{eq:nls}, for every
+$V$, $\alpha$ and $\beta$.
+\end{theorem}
+
+\begin{proof}
+Invariance is immediate: every term of $\Ham$ involves $\psi$ paired with $\bar\psi$, so
+the phases cancel. For conservation, compute directly:
+\[
+\frac{\dd}{\dd t}\Mass
+= \int 2\Real\bigl(\bar\psi\,\psi_t\bigr)
+= \int 2\Real\Bigl(\iu\,\bar\psi\bigl(\alpha\lap\psi + \beta|\psi|^2\psi - V\psi\bigr)\Bigr).
+\]
+The terms $\beta|\psi|^4$ and $-V|\psi|^2$ are real, so $\iu$ times them is purely
+imaginary and contributes nothing. For the remaining term, integrate by parts:
+$\int \bar\psi\lap\psi = -\int|\nabla\psi|^2$, which is real, so
+$\Real(\iu\alpha\cdot(\text{real}))=0$. Hence $\dd\Mass/\dd t = 0$.
+\end{proof}
+
+\begin{theorem}[Momentum conservation, only when $V\equiv 0$]
+\label{thm:momentum}
+If $V\equiv 0$ then \eqref{eq:nls} is invariant under translations and $\Mom$ is
+conserved. For non-constant $V$ it is not.
+\end{theorem}
+
+\begin{proof}
+With $V\equiv 0$ the equation has no explicit $x$-dependence, so
+$\psi(\cdot,t)\mapsto\psi(\cdot-a,t)$ maps solutions to solutions; Noether's theorem for
+the translation group gives conservation of $\Mom$. Concretely, in $d=1$,
+\[
+\frac{\dd\Mom}{\dd t}
+= \Imag\int\bigl(\bar\psi_t\psi_x + \bar\psi\psi_{xt}\bigr)
+= -\int V_x\,|\psi|^2 ,
+\]
+after substituting \eqref{eq:nls-evol} and integrating by parts; the kinetic and
+nonlinear terms produce exact derivatives, which integrate to zero on $\T$. The right-hand
+side vanishes for every $\psi$ precisely when $V_x\equiv 0$.
+\end{proof}
+
+\begin{proposition}[The Strang step conserves momentum too, when $V\equiv0$]
+\label{prop:discretemomentum}
+On the periodic grid with spectral differentiation, $\Flow_{\dt}$ preserves the discrete
+momentum $\Mom_h[\psi] = \mu\,\Imag\sum_j\overline{\psi_j}(\partial_x^{\mathrm{spec}}\psi)_j$
+exactly when $V\equiv0$.
+\end{proposition}
+
+\begin{proof}
+In Fourier, $\Mom_h = \tfrac{\mu}{N}\sum_k k\,|\widehat\psi_k|^2$, which the kinetic
+substep leaves invariant because it changes only the \emph{phases} of $\widehat\psi_k$.
+For the local substep, write $\psi\mapsto \eu^{\iu\vartheta}\psi$ with
+$\vartheta = \beta\rho\,\dt$ real. Then
+\[
+\overline{\eu^{\iu\vartheta}\psi}\;\partial_x\bigl(\eu^{\iu\vartheta}\psi\bigr)
+= \bar\psi\,\partial_x\psi \;+\; \iu\,\vartheta_x\,|\psi|^2 ,
+\]
+so the momentum picks up
+$\int \vartheta_x\rho = \beta\dt\int\rho_x\rho = \tfrac{\beta\dt}{2}\int(\rho^2)_x = 0$,
+the integral of a derivative over a periodic domain --- which vanishes discretely as well,
+since the $k=0$ coefficient of a spectral derivative is exactly zero.
+\end{proof}
+
+\begin{observation}[Verified]
+Over 200 steps at $\dt=0.01$ in \code{float64} on a random band-limited field:
+relative momentum drift $6.7\times10^{-10}$ with $V\equiv0$ (roundoff, accumulating
+linearly from $2.6\times10^{-13}$ after one step) versus $6.4\times10^{-2}$ with
+$V=0.4\cos 2x$. Eight orders of magnitude of separation.
+\end{observation}
+
+\begin{remark}[Why this matters for the experiments]
+The shift arm \code{G3-potential-zero} sets $V\equiv 0$, which restores translation
+invariance and therefore adds a \emph{third} exactly conserved quantity to the problem
+that is absent in the training distribution. That arm is consequently not just ``an
+easier potential'': it is a structurally different problem, and it is the one arm where a
+model could be right for a reason none of the training data exercised.
+\end{remark}
+
+\subsection{Plane waves and the dispersion relation}
+
+\begin{proposition}[Plane wave]
+\label{prop:planewave}
+For \emph{constant} potential $V\equiv V_0$, the field
+\[
+\psi(x,t) \;=\; A\,\eu^{\iu(k\cdot x - \omega t)},\qquad A>0,\ k\in\Z^d,
+\]
+solves \eqref{eq:nls} exactly if and only if
+\begin{equation}
+\label{eq:dispersion}
+\omega \;=\; \alpha|k|^2 \;-\; \beta A^2 \;+\; V_0 .
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+Substituting: $\psi_t = -\iu\omega\psi$, $\lap\psi = -|k|^2\psi$, $|\psi|^2 = A^2$
+(constant in $x$ and $t$). Then \eqref{eq:nls} reads
+$\omega\psi - \alpha|k|^2\psi + \beta A^2\psi - V_0\psi = 0$, and dividing by $\psi\neq0$
+gives \eqref{eq:dispersion}. The ``only if'' direction is the same computation read
+backwards.
+\end{proof}
+
+Equation \eqref{eq:dispersion} is the ground truth every trained model --- black-box
+models included --- is probed against in Part~III. Note the three separate dependencies
+it encodes: quadratic in $k$, linear in $\alpha$, and linear in the \emph{amplitude}
+through $\beta A^2$. The last one is why the probe amplitude cannot be chosen freely
+(\S\ref{sec:probeamp}).
+
+\begin{proposition}[Plane-wave mass]
+\label{prop:pwmass}
+$\Mass[A\eu^{\iu k\cdot x}] = A^2\prod_j L_j$, which for $\T^d=[0,2\pi)^d$ is
+$A^2(2\pi)^d$.
+\end{proposition}
+
+\subsection{The discrete setting}
+\label{sec:discrete}
+
+All computation happens on a uniform, endpoint-free grid of $N$ points per dimension,
+with spacing $h_j = L_j/N_j$ and cell volume $\mu = \prod_j h_j$. The discrete Fourier
+transform uses the \code{norm="backward"} convention: the forward transform carries no
+factor and the inverse carries $1/N$.
+
+\begin{definition}[Discrete objects]
+For a grid field $\psi\in\C^{N}$:
+\[
+\Mass_h[\psi] = \mu\sum_{j}|\psi_j|^2,\qquad
+\widehat{\psi}_k = \sum_j \psi_j \eu^{-\iu k x_j},\qquad
+\lap_h \psi = \mathcal{F}^{-1}\bigl(-|k|^2\widehat\psi\bigr),
+\]
+with wave vectors $k = 2\pi\,\mathrm{fftfreq}(N,h)$, so that on $[0,2\pi)$ they are exactly
+the integers $\{0,1,\dots,N/2-1,-N/2,\dots,-1\}$.
+\end{definition}
+
+\begin{lemma}[Discrete Parseval]
+\label{lem:parseval}
+$\sum_j|\psi_j|^2 = \tfrac{1}{N}\sum_k|\widehat\psi_k|^2$. Consequently, multiplying
+$\widehat\psi$ pointwise by any function of modulus one preserves $\Mass_h$.
+\end{lemma}
+
+\begin{proof}
+Standard for the unnormalised DFT: $\sum_k|\widehat\psi_k|^2
+= \sum_k\sum_{j,l}\psi_j\bar\psi_l\eu^{-\iu k(x_j-x_l)} = N\sum_j|\psi_j|^2$, using
+$\sum_k \eu^{-\iu k(x_j-x_l)} = N\delta_{jl}$. The second claim follows because
+$|m_k\widehat\psi_k| = |\widehat\psi_k|$ when $|m_k|=1$.
+\end{proof}
+
+Lemma~\ref{lem:parseval} is the entire reason the kinetic substep of every operator in
+this project conserves mass exactly, and it is why the mass guarantee is
+\emph{architectural} rather than merely accurate.
+
+\begin{trap}[Wave vectors must be built in \texttt{float64} and narrowed, not built
+natively]
+\label{trap:k2}
+At $N=64$, evaluating $2\pi\,\mathrm{fftfreq}$ in \code{float64} lands $2.3\times10^{-13}$
+from the exact integers and narrows to them exactly; evaluating the same expression in
+\code{float32} lands $1.2\times10^{-4}$ away, and that error \emph{survives} a later
+widening to \code{float64}. Nine orders of magnitude above the $10^{-13}$ bounds the
+structural tests assert. Every $|k|^2$ buffer in the codebase is therefore constructed in
+double and then narrowed --- including on rebinding to a new grid.
+\end{trap}
+
+\begin{trap}[A \texttt{float32} parameter poisons a \texttt{float64} field]
+\label{trap:param}
+\code{torch.tensor([0.9])} is \code{float32}. Feeding it as $\alpha$ to a
+\code{complex128} field costs $\approx 2.6\times10^{-8}$ in $\alpha$, which moves the
+one-step phase at $k=30$ by $\approx5\times10^{-7}$ --- invalidating every
+$10^{-9}$ assertion in the project. \code{batch\_parameter} rejects the downcast rather
+than promoting silently.
+\end{trap}
+
+\sourcenote{src/spno/equations/nls.py, src/spno/domain.py}
+
+\newpage
+\section{Operator splitting}
+\label{sec:splitting}
+
+\subsection{The two sub-flows}
+
+Write \eqref{eq:nls-evol} as $\psi_t = (\mathcal{A} + \mathcal{B})\psi$ with
+\[
+\mathcal{A}\psi \;=\; \iu\,\alpha\lap\psi
+\qquad\text{(kinetic, linear, diagonal in Fourier)},
+\]
+\[
+\mathcal{B}\psi \;=\; \iu\bigl(\beta|\psi|^2 - V\bigr)\psi
+\qquad\text{(local, nonlinear, diagonal in physical space)}.
+\]
+Each generator has a \emph{closed-form exact flow}. That is the whole point of the
+splitting: neither piece is approximated.
+
+\begin{lemma}[Exact kinetic flow]
+\label{lem:kinetic}
+The solution of $\psi_t = \iu\alpha\lap\psi$ is
+$\Kop_\tau\psi = \mathcal{F}^{-1}\!\left(\eu^{-\iu\alpha|k|^2\tau}\,\widehat\psi\right)$.
+\end{lemma}
+
+\begin{proof}
+In Fourier, $\lap$ acts as multiplication by $-|k|^2$, so
+$\partial_t\widehat\psi_k = -\iu\alpha|k|^2\widehat\psi_k$, a scalar linear ODE per mode
+with solution $\widehat\psi_k(\tau)=\eu^{-\iu\alpha|k|^2\tau}\widehat\psi_k(0)$. On the
+grid this is exact for every mode the grid represents; there is no spatial discretisation
+error.
+\end{proof}
+
+\begin{lemma}[Exact local flow; the density is frozen]
+\label{lem:local}
+Along $\psi_t = \iu(\beta|\psi|^2-V)\psi$, the density $\rho = |\psi|^2$ is constant in
+time \emph{pointwise}. Consequently the flow is
+$\Nop_\tau\psi = \eu^{\iu(\beta\rho - V)\tau}\,\psi$, with $\rho$ evaluated at the initial
+state.
+\end{lemma}
+
+\begin{proof}
+$\partial_t\rho = 2\Real(\bar\psi\psi_t) = 2\Real\bigl(\iu(\beta\rho-V)|\psi|^2\bigr) = 0$,
+because $\beta\rho - V$ is real and $\iu\times(\text{real})$ is purely imaginary. With
+$\rho$ frozen, the equation becomes $\psi_t = \iu c(x)\psi$ with $c$ independent of $t$,
+whose solution is the stated multiplier.
+\end{proof}
+
+Lemma~\ref{lem:local} is the single most important structural fact in the project. It is
+what makes the local substep exactly invertible, exactly mass-preserving, and exactly
+Hamiltonian --- and it is what breaks in Model C3, where the phase is allowed to read
+$\Real\psi$ and $\Imag\psi$ separately (\S\ref{sec:c3}).
+
+\subsection{The Strang step}
+
+\begin{definition}[Symmetric / Strang splitting]
+\label{def:strang}
+\[
+\boxed{\;\Flow_{\dt} \;=\; \Kop_{\dt/2}\circ\Nop_{\dt}\circ\Kop_{\dt/2}\;}
+\]
+\end{definition}
+
+The palindromic ordering is not cosmetic. It buys three separate properties --- second
+order, time-symmetry, and (with symplectic substeps) a symmetric symplectic integrator ---
+none of which the asymmetric Lie--Trotter step $\Kop_{\dt}\Nop_{\dt}$ has.
+
+\begin{theorem}[Exact mass conservation]
+\label{thm:strangmass}
+$\Mass_h[\Flow_{\dt}\psi] = \Mass_h[\psi]$ exactly, in exact arithmetic, for every
+$\dt,\alpha,\beta,V$.
+\end{theorem}
+
+\begin{proof}
+$\Nop$ multiplies each grid value by $\eu^{\iu(\beta\rho-V)\dt}$, a complex number of
+modulus one (the exponent is real by Lemma~\ref{lem:local}), so $|\psi_j|$ is unchanged
+at every $j$ and hence $\sum_j|\psi_j|^2$ is unchanged. $\Kop$ multiplies each Fourier
+coefficient by $\eu^{-\iu\alpha|k|^2\tau}$, again of modulus one, so by
+Lemma~\ref{lem:parseval} $\sum_j|\psi_j|^2$ is again unchanged. A composition of
+norm-preserving maps preserves the norm.
+\end{proof}
+
+\begin{theorem}[Exact time-reversibility]
+\label{thm:strangrev}
+$\Flow_{-\dt}\circ\Flow_{\dt} = \Id$ exactly.
+\end{theorem}
+
+\begin{proof}
+Expand, writing $h=\dt/2$:
+\[
+\Flow_{-\dt}\Flow_{\dt}
+= \Kop_{-h}\Nop_{-\dt}\Kop_{-h}\;\Kop_{h}\Nop_{\dt}\Kop_{h}.
+\]
+The inner pair cancels: $\Kop_{-h}\Kop_{h}=\Id$, since the Fourier multipliers
+$\eu^{+\iu\alpha|k|^2h}$ and $\eu^{-\iu\alpha|k|^2h}$ multiply to $1$ mode by mode. It
+remains to show $\Nop_{-\dt}\Nop_{\dt}=\Id$. Let $w$ be the state entering $\Nop_{\dt}$
+and put $\rho_w = |w|^2$. Then $v := \Nop_{\dt}w = \eu^{\iu(\beta\rho_w-V)\dt}w$, and by
+Lemma~\ref{lem:local} $|v|^2 = \rho_w$ --- the backward step reads the \emph{same}
+density field. Hence
+$\Nop_{-\dt}v = \eu^{-\iu(\beta\rho_w-V)\dt}v = w$.
+The outer pair $\Kop_{-h}\cdots\Kop_{h}$ then cancels likewise.
+\end{proof}
+
+\begin{theorem}[Symplecticity]
+\label{thm:strangsympl}
+$\Flow_{\dt}$ is a symplectic map on the phase space $(\psi,\bar\psi)$ with the standard
+structure induced by \eqref{eq:hamform}.
+\end{theorem}
+
+\begin{proof}
+By Lemma~\ref{lem:kinetic}, $\Kop_\tau$ is the exact time-$\tau$ flow of the Hamiltonian
+$\Ham_K = \alpha\int|\nabla\psi|^2$; by Lemma~\ref{lem:local}, $\Nop_\tau$ is the exact
+time-$\tau$ flow of $\Ham_N = \int\bigl(V\rho - \tfrac{\beta}{2}\rho^2\bigr)$. (Both
+identifications are verified in the general learned setting in
+Theorem~\ref{thm:learnedmain}(3), of which this is the special case $\kappa=-\alpha|k|^2$,
+$\nu = \beta\rho - V$.) The exact flow of a Hamiltonian is symplectic, and a composition
+of symplectic maps is symplectic.
+\end{proof}
+
+\begin{theorem}[Second order]
+\label{thm:strangorder}
+$\Flow_{\dt}$ is consistent of order $2$: its local error is $O(\dt^3)$.
+\end{theorem}
+
+\begin{proof}
+Two routes; both are worth having.
+
+\emph{(i) Symmetry.} By Theorem~\ref{thm:strangrev} the method satisfies
+$\Flow_{-\dt}\circ\Flow_{\dt}=\Id$. Write the local error as
+$\Flow_{\dt} = \varphi_{\dt} + \sum_{p\ge p_0} \dt^{\,p+1} E_p$ where $\varphi$ is the
+exact flow. Time-symmetry forces the expansion of $\Flow$ in $\dt$ to contain only odd
+powers beyond the exact flow, so the leading error exponent $p_0+1$ is odd, i.e.\ the
+order $p_0$ is even. Since the method is consistent ($p_0\ge1$), $p_0\ge2$.
+
+\emph{(ii) Baker--Campbell--Hausdorff.} For generators $\mathcal{A},\mathcal{B}$,
+\[
+\eu^{\frac{h}{2}\mathcal{A}}\eu^{h\mathcal{B}}\eu^{\frac{h}{2}\mathcal{A}}
+\;=\;
+\exp\Bigl(h(\mathcal{A}+\mathcal{B}) \;+\; h^3\,\mathcal{C}_2 \;+\; O(h^5)\Bigr),
+\]
+\begin{equation}
+\label{eq:bch}
+\mathcal{C}_2 \;=\; -\tfrac{1}{24}\bigl[\mathcal{A},[\mathcal{A},\mathcal{B}]\bigr]
+\;+\;\tfrac{1}{12}\bigl[\mathcal{B},[\mathcal{B},\mathcal{A}]\bigr].
+\end{equation}
+The $h^2$ term vanishes identically by the palindromic structure --- this is exactly why
+the asymmetric Lie--Trotter step is only first order --- leaving a local error $O(h^3)$.
+\end{proof}
+
+\begin{corollary}[Modified Hamiltonian and bounded energy error]
+\label{cor:modham}
+$\Flow_{\dt}$ is the exact flow of a modified Hamiltonian
+$\widetilde\Ham = \Ham + \dt^2\Ham_2 + O(\dt^4)$, where $\dt^2\Ham_2$ is built from the
+double commutators in \eqref{eq:bch}. Consequently the error in $\Ham$ along a numerical
+trajectory is $O(\dt^2)$ and \textbf{bounded}, oscillating about a level rather than
+growing with the horizon.
+\end{corollary}
+
+This is the falsifiable prediction that the whole rollout-diagnostics apparatus
+(\S\ref{sec:drift}) exists to test. It is what separates a structure-preserving
+integrator from a merely accurate one: an accurate non-symplectic method has nothing
+preventing \emph{secular} energy drift.
+
+\begin{observation}[The reference solver behaves as predicted]
+\label{obs:phase0}
+Over $1000$ steps at $\dt=0.01$ in \code{float64}: maximum relative mass drift
+$3.82\times10^{-13}$; maximum relative energy drift $7.92\times10^{-5}$, with the
+late-window maximum $0.83\times$ the early-window maximum --- classified \emph{bounded}.
+Measured Strang convergence order, finest ratio: $2.0465$.
+\end{observation}
+
+\begin{trap}[Pre-asymptotic convergence ratios are meaningless]
+The measured order ratios across substeps $(4,8,16,32,64)$ are
+$(1.69,\,4.24,\,2.22,\,2.05)$. The $4.24$ is a cancellation artefact in the
+pre-asymptotic regime, not a fourth-order method. Only the finest ratio is quoted, and
+convergence claims are always made by \emph{measured scaling}
+($\log_2(e_{i+1}/e_i)$ compared against the expected order) rather than by an absolute
+threshold.
+\end{trap}
+
+\subsection{The substepped reference, and why targets cannot be single Strang steps}
+\label{sec:substepped}
+
+\begin{definition}[Substepped reference]
+\[
+\Flow^{\mathrm{ref}}_{\dt} \;=\; \bigl(\Flow_{\dt/M}\bigr)^{\circ M},\qquad M = 32 .
+\]
+\end{definition}
+
+\begin{remark}[The central methodological confound]
+\label{rem:tautology}
+This is not a numerical nicety; it is what stops the study from being circular. Model C
+is, by construction, \emph{a single Strang step with learned rates}. If the training
+targets were produced by a single Strang step at the same $\dt$, the true one-step map
+would lie \emph{inside} Model C's hypothesis class, and ``structure beats FNO'' would be
+a tautology --- C would win because it was handed the answer, not because structure
+helps. Targets must therefore come from a converged, substepped reference, and every
+error is quoted relative to it.
+\end{remark}
+
+\begin{definition}[The splitting floor]
+\label{def:epssplit}
+\[
+\epssplit \;=\; \bigl\| \Flow_{\dt} - \Flow^{\mathrm{ref}}_{\dt}\bigr\|_{\text{rel }L^2},
+\]
+the relative $L^2$ error of one Strang step at $\dt$ against the substepped reference,
+measured on the production distribution.
+\end{definition}
+
+$\epssplit$ is an \emph{analytic lower bound on the one-step error of any model whose
+hypothesis class is a single split step at $\dt$ with the exact rates}. Its role in the
+argument is precise:
+
+\begin{itemize}[leftmargin=1.3em,itemsep=0.2em]
+\item A structured model that trains \emph{down to} $\epssplit$ has recovered the physics
+--- there is nothing left in its class to find.
+\item A black-box model that goes \emph{below} $\epssplit$ is exploiting non-split
+structure that the splitting cannot represent. That is a finding about expressivity, not
+a failure of the bound.
+\item A black-box model that sits well \emph{above} $\epssplit$ has left headroom for the
+structured models. This is what was measured: the FNO is $11\times$ above the floor.
+\end{itemize}
+
+\subsection{The fitted floor: the bound a \emph{learned} split step actually faces}
+\label{sec:fittedfloor}
+
+Definition~\ref{def:epssplit} measures the error of the Strang map built from the
+\emph{true} rates $\kappa = -\alpha|k|^2$, $\nu = \beta\rho - V$. A learned split step is
+under no obligation to use those. It may pick \emph{effective} rates that absorb part of
+the $O(\dt^2)$ commutator, so the quantity that genuinely lower-bounds Model C is
+\begin{equation}
+\label{eq:fittedfloor}
+\epssplit^{\mathrm{fit}}
+\;=\;
+\inf_{\theta}\;\bigl\|\Flow^\theta_{\dt} - \Flow^{\mathrm{ref}}_{\dt}\bigr\| .
+\end{equation}
+
+Two nested families are fitted, both shared across the whole batch (a single model must
+serve every $(\alpha,\beta)$):
+\[
+\text{(scalar)}\quad \kappa = -c_0\,\alpha|k|^2,\quad \nu = c_1(\beta\rho - V);
+\qquad
+\text{(per-mode)}\quad \kappa = -\alpha|k|^2\,g(|k|^2),
+\]
+with $g$ a free vector initialised at $1$. The per-mode family is exactly the \code{K2}
+parameterisation Phase~4 gives Model C1, so its achieved error is the target C1-K2 must
+be measured against. Note that $g$ \emph{multiplies} $\alpha|k|^2$ rather than replacing
+it: a free function of $|k|^2$ alone could not represent the required $\alpha$-scaling.
+
+\begin{observation}[$\epssplit$ is a genuine bound]
+\label{obs:floor}
+Fitting the effective generators recovers the exact rates to within $10^{-4}$
+($c_0 = 1.0000008$, $c_1 = 0.9999979$) and improves the error by at most $\sim$5\%:
+$\epssplit^{\mathrm{fit}}/\epssplit = 0.9999978$ for the scalar family and $0.99999$ for
+the free 32-parameter per-mode family. \emph{The Strang commutator is very nearly
+orthogonal to the span of the generators.} There is no ``cheap'' effective rate that
+absorbs it.
+\end{observation}
+
+\begin{observation}[Reference self-convergence]
+$M{=}32$ versus $M{=}64$ differ by $1.50\times10^{-7}$, i.e.\ $0.24\%$ of $\epssplit$.
+The reference is converged well below the quantity it is used to measure.
+\end{observation}
+
+\sourcenote{src/spno/solvers/split\_step.py}
+\newpage
+\part*{Part II \quad What each model class guarantees}
+\addcontentsline{toc}{part}{Part II \; What each model class guarantees}
+
+\section{Model A --- the unrestricted Fourier neural operator}
+\label{sec:fno}
+
+\subsection{The spectral convolution}
+
+\begin{definition}[Mode-truncated global convolution]
+For a hidden state $u\in\R^{C\times N}$ and learned complex weights
+$R\in\C^{C\times C'\times m}$,
+\[
+\bigl(\mathcal{S}u\bigr) \;=\; \mathcal{F}^{-1}\Bigl( \mathbf{1}_{|k|<m}\cdot R_k\,\widehat{u}_k \Bigr),
+\]
+where $\mathcal{F}$ is the real FFT and $m$ is the retained mode budget
+(\code{modes}$=16$). Modes above $m$ are set to zero, not merely damped.
+\end{definition}
+
+An FNO layer is $u\mapsto \sigma\bigl(\mathcal{S}u + Wu\bigr)$ with $W$ a pointwise
+($1\times1$) convolution. The full model lifts $5$ real input channels
+$(\Real\psi,\Imag\psi,V,\alpha,\beta)$ to width $64$, applies four such layers, and
+projects to $2$ output channels read as $(\Real\psi',\Imag\psi')$.
+
+\begin{proposition}[Grid independence, and its exact scope]
+\label{prop:fnogrid}
+The spectral weights $R$ are indexed by \emph{frequency}, and the inverse transform
+receives the target length $n$ at call time. Hence the same weights define the same
+operator on any grid --- \textbf{for $|k|\le m$ only}. They say nothing whatever about
+modes above the budget.
+\end{proposition}
+
+This is the \emph{only} source of the FNO's much-advertised resolution transfer, and
+\S\ref{sec:resolution} is largely about not overclaiming it.
+
+\begin{guarantee}[Model A guarantees nothing]
+\label{guar:fnonone}
+$\Flow^{\mathrm{A}}$ is an arbitrary trained map $\C^N\to\C^N$. It does not conserve
+$\Mass_h$, does not conserve $\Ham$, is not time-reversible, is not $U(1)$-equivariant,
+and does not respect \eqref{eq:dispersion}. Any agreement with these is learned and
+approximate.
+\end{guarantee}
+
+\begin{remark}[$\dt$ does not enter the map]
+\label{rem:fnodt}
+The FNO ignores its $\dt$ argument entirely. Consequently:
+(i) evaluating it at $-\dt$ re-applies the \emph{forward} map, so any ``reversibility''
+number measured that way is an artefact --- \code{evaluate\_reversibility} refuses rather
+than returning it; and (ii) it has no basis for $\dt$-transfer. The base class
+encodes this as \code{supports\_time\_reversal} and \code{supports\_dt\_transfer} flags
+that raise rather than silently returning a wrong answer.
+\end{remark}
+
+\subsection{Three design choices, each tied to a confound}
+
+\begin{enumerate}[leftmargin=1.4em,itemsep=0.35em]
+\item \textbf{Parameter conditioning is rescaled to $O(1)$.} $\alpha$ and $\beta$ are
+broadcast over the grid and mapped affinely from their sampling ranges to $[-1,1]$:
+\[
+\tilde\alpha = \frac{2(\alpha-\alpha_{\min})}{\alpha_{\max}-\alpha_{\min}} - 1 .
+\]
+A consequence worth recording: with $\alpha\in[0.7,1.1]$, the value $\alpha=0$ enters the
+lift channel at $\tilde\alpha = -4.5$. Any $\alpha$-continuation experiment
+(\S\ref{sec:continuation}) that anchors near $\alpha=0$ is therefore probing
+$\alpha$-extrapolation, and a failure there says nothing about whether the
+$\alpha$-derivative information was extracted.
+
+\item \textbf{No absolute-coordinate channel.} The joint operator $(\psi,V)\mapsto\psi'$
+is translation-equivariant --- the potential, not the coordinate, is what breaks
+homogeneity. Feeding $x$ into the lift lets the model memorise position instead of
+learning the operator. Kept behind a flag as an ablation.
+
+\item \textbf{A single global amplitude scale, not per-sample normalisation.} The
+nonlinearity $\beta|\psi|^2\psi$ is \emph{not} scale-invariant, and mass varies across
+samples by design (\S\ref{sec:datadesign}). Normalising each sample by its own norm would
+destroy exactly the information the nonlinear term depends on.
+\end{enumerate}
+
+\subsection{The three separable causes of high-$k$ failure}
+\label{sec:highk}
+
+When an FNO does badly at large $|k|$, three mechanisms are in play, and only one of them
+is interesting. Keeping them apart is the entire design of experiment G7.
+
+\begin{enumerate}[label=(\alph*),leftmargin=1.6em,itemsep=0.25em]
+\item \textbf{Hard mode truncation beyond $m$.} The spectral branch contributes nothing
+above $|k|=m=16$. High-$k$ content can only reach the output through the pointwise
+branches and the nonlinearity. \emph{Trivial}, and removable by matching $m$ to Nyquist.
+\item \textbf{The oscillatory dependence of $\eu^{-\iu\alpha|k|^2\dt}$ on $\alpha$.} The
+FNO must route this through a pointwise lift of a broadcast scalar. \emph{This is the
+interesting one} --- it is a statement about inductive bias.
+\item \textbf{No training energy above $\ktrain$.} Initial conditions are band-limited to
+$|k|\le 8$; nothing above that is supervised. \emph{No architecture fixes this.}
+\end{enumerate}
+
+\sourcenote{src/spno/models/fno.py}
+
+\section{Model B --- hard constraint projection}
+\label{sec:projection}
+
+\begin{definition}[Mass projection]
+\label{def:proj}
+\[
+\Pi_{M}(\psi) \;=\; \sqrt{\frac{M}{\Mass_h[\psi]}}\;\psi,
+\qquad
+\Flow^{\mathrm{B}}_{\dt}(\psi_n) \;=\; \Pi_{\Mass_h[\psi_n]}\bigl(\Flow^{\mathrm{A}}_{\dt}(\psi_n)\bigr).
+\]
+\end{definition}
+
+\begin{proposition}[$\Pi_M$ is the metric projection onto the mass sphere]
+\label{prop:metricproj}
+Let $S_R=\{u:\|u\|_{L^2_h}=R\}$ with $R=\sqrt{M}$. For $\psi\neq 0$,
+\[
+\Pi_M(\psi) \;=\; \argmin_{u\in S_R}\|u-\psi\|_{L^2_h},
+\qquad\text{and}\qquad
+\min_{u\in S_R}\|u-\psi\| \;=\; \bigl|\,R - \|\psi\|\,\bigr| .
+\]
+\end{proposition}
+
+\begin{proof}
+For $u\in S_R$, $\|u-\psi\|^2 = R^2 + \|\psi\|^2 - 2\Real\langle u,\psi\rangle$, so
+minimising the distance maximises $\Real\langle u,\psi\rangle$. By Cauchy--Schwarz,
+$\Real\langle u,\psi\rangle \le \|u\|\|\psi\| = R\|\psi\|$ with equality iff $u$ is a
+positive multiple of $\psi$; the unique such $u$ in $S_R$ is $R\psi/\|\psi\|$, which is
+$\Pi_M(\psi)$. Substituting gives $\|u-\psi\|^2 = (R-\|\psi\|)^2$.
+\end{proof}
+
+So the name is earned: this is genuinely the closest mass-correct field, not merely a
+convenient rescaling.
+
+\begin{guarantee}[Exact mass, and nothing else]
+\label{guar:B}
+$\Mass_h[\Flow^{\mathrm{B}}_{\dt}\psi_n] = \Mass_h[\psi_n]$ exactly in exact arithmetic,
+for every parameter value. Model B guarantees \textbf{no other} property: not phase, not
+energy, not reversibility, not the dispersion relation.
+\end{guarantee}
+
+\begin{remark}[Two training modes, and they are not equivalent]
+\emph{Projection in the loop} makes $\Pi$ part of the forward pass, so gradients flow
+through it and the core learns to produce fields whose \emph{shape} is right with
+amplitude handled downstream. \emph{Post hoc} trains the core unconstrained and applies
+$\Pi$ only at evaluation, so the core still spends capacity on the amplitude. They must
+be reported separately.
+\end{remark}
+
+\begin{observation}[What one hard invariant actually buys]
+\label{obs:B}
+Across $3$ seeds at matched budget: the projection removes mass drift across
+\textbf{13 orders of magnitude} ($1.61\times10^{-2}\to1.3\times10^{-15}$ at step 100) and
+buys \textbf{$\sim$12\% rollout accuracy} ($2.77\times10^{-2}\to2.44\times10^{-2}$),
+of which $\sim$7 points come from the projection alone and $\sim$5 from training with it.
+Energy remains \textbf{secular} for A, B-post and B-loop alike, in $9/9$ seed--model runs.
+\emph{Projecting mass does not fix energy.} If that reads as a disappointing result, it
+is the intended lesson: one scalar constraint is one scalar constraint.
+\end{observation}
+
+\sourcenote{src/spno/models/projected.py, src/spno/domain.py}
+
+\section{Model C --- structure encoded in the architecture}
+\label{sec:learnedsplit}
+
+\subsection{The parameterisation}
+
+\begin{definition}[Learned split step]
+\label{def:learnedsplit}
+\[
+\boxed{\;
+\Flow^{\theta}_{\dt} \;=\; \Kop^{\theta}_{\dt/2}\circ\Nop^{\theta}_{\dt}\circ\Kop^{\theta}_{\dt/2}
+\;}
+\]
+with
+\[
+\widehat{\Kop^{\theta}_{\tau}\psi}(k) \;=\; \eu^{\,\iu\tau\,\kappa_\theta(|k|^2,\alpha,\beta)}\;\widehat\psi(k),
+\qquad
+\Nop^{\theta}_{\tau}\psi \;=\; \eu^{\,\iu\tau\,\nu_\theta(\rho,V,\alpha,\beta)}\;\psi,
+\qquad \rho=|\psi|^2,
+\]
+and \textbf{both $\kappa_\theta$ and $\nu_\theta$ real-valued}. The true values are
+$\kappa = -\alpha|k|^2$ and $\nu = \beta\rho - V$.
+\end{definition}
+
+Everything that follows depends on exactly two facts: the rates are \emph{real}, and
+$\nu_\theta$ sees $\psi$ \emph{only through $\rho$}.
+
+\subsection{The main theorem}
+
+\begin{theorem}[Structure of the learned split step]
+\label{thm:learnedmain}
+For every $\theta$ --- untrained weights included --- the map $\Flow^\theta_{\dt}$ of
+Definition~\ref{def:learnedsplit} satisfies:
+\begin{enumerate}[label=\textup{(\arabic*)},leftmargin=2.2em,itemsep=0.3em]
+\item \textbf{Exact mass.} $\Mass_h[\Flow^\theta\psi] = \Mass_h[\psi]$.
+\item \textbf{Exact reversibility.} $\Flow^\theta_{-\dt}\circ\Flow^\theta_{\dt} = \Id$.
+\item \textbf{Symplecticity, as the Strang splitting of a learned Hamiltonian.} There
+exists $\Ham_\theta = \Ham_{K,\theta} + \Ham_{N,\theta}$ with
+\[
+\Ham_{K,\theta} = -\!\int \kappa_\theta(|k|^2)\,|\widehat\psi(k)|^2,
+\qquad
+\Ham_{N,\theta} = -\!\int F_\theta(\rho,V),\quad \frac{\partial F_\theta}{\partial\rho}=\nu_\theta,
+\]
+such that each substep is the \emph{exact} flow of its sub-Hamiltonian. Hence
+$\Flow^\theta_{\dt}$ is symplectic and time-symmetric.
+\item \textbf{Global $U(1)$ equivariance.}
+$\Flow^\theta(\eu^{\iu c}\psi) = \eu^{\iu c}\,\Flow^\theta(\psi)$ for every $c\in\R$.
+\end{enumerate}
+\end{theorem}
+
+\begin{proof}\leavevmode
+
+\emph{(1).} $\nu_\theta$ is real-valued by construction, so $\eu^{\iu\dt\nu_\theta}$ has
+modulus one pointwise and $|\psi_j|$ is unchanged at every grid point. $\kappa_\theta$ is
+real-valued, so $\eu^{\iu\tau\kappa_\theta}$ has modulus one mode by mode and
+Lemma~\ref{lem:parseval} applies. Composition of norm-preserving maps.
+
+\emph{(2).} The kinetic multipliers cancel in pairs exactly as in
+Theorem~\ref{thm:strangrev}, because $\kappa_\theta$ does not depend on $\psi$ at all ---
+it is a function of $(|k|^2,\alpha,\beta)$ only, so the forward and backward half-steps
+use \emph{identical} rates. For the local step, let $w$ be its input, $\rho_w=|w|^2$, and
+$v = \eu^{\iu\dt\nu_\theta(\rho_w,\cdot)}w$. By (1) applied pointwise, $|v|^2 = \rho_w$,
+so $\nu_\theta$ evaluated at $v$ equals $\nu_\theta$ evaluated at $w$ --- the backward
+step reads the same phase field --- and
+$\eu^{-\iu\dt\nu_\theta(\rho_w,\cdot)}v = w$. This is the step where $\rho$-only
+dependence is used, and it is the step that fails for C3.
+
+\emph{(3).} Consider first the kinetic generator. The flow
+$\partial_t\widehat\psi_k = \iu\kappa_k\widehat\psi_k$ is Hamiltonian with
+$\Ham_{K,\theta} = -\sum_k \kappa_k|\widehat\psi_k|^2$ (up to the DFT normalisation),
+since
+\[
+\frac{\partial \Ham_{K,\theta}}{\partial\overline{\widehat\psi_k}} = -\kappa_k\widehat\psi_k
+\quad\Longrightarrow\quad
+\iu\,\partial_t\widehat\psi_k = \frac{\partial\Ham_{K,\theta}}{\partial\overline{\widehat\psi_k}}
+\quad\Longleftrightarrow\quad
+\partial_t\widehat\psi_k = \iu\kappa_k\widehat\psi_k .
+\]
+$\Ham_{K,\theta}$ is real because $\kappa_\theta$ is.
+
+Now the local generator $\partial_t\psi = \iu\nu_\theta(\rho,V)\psi$. Fix $(V,\alpha,\beta)$
+and define
+\[
+F_\theta(\rho) \;=\; \int_0^{\rho}\nu_\theta(s,V,\alpha,\beta)\dd s,
+\]
+which exists because $\nu_\theta$ is a continuous (indeed smooth) function of the
+\emph{scalar} $\rho$ --- this is the point at which the pointwise structure is
+indispensable, and it is why an antiderivative always exists no matter what the network
+has learned. Set $\Ham_{N,\theta} = -\int F_\theta(\rho)\dd x$. Using
+$\rho = \psi\bar\psi$ so that $\partial\rho/\partial\bar\psi = \psi$,
+\[
+\frac{\delta \Ham_{N,\theta}}{\delta\bar\psi}
+= -\frac{\partial F_\theta}{\partial\rho}\cdot\frac{\partial\rho}{\partial\bar\psi}
+= -\nu_\theta\,\psi
+\quad\Longrightarrow\quad
+\iu\,\partial_t\psi = -\nu_\theta\psi \cdot(-1)
+\quad\Longleftrightarrow\quad
+\partial_t\psi = \iu\nu_\theta\psi ,
+\]
+as required. Finally, by the argument of Lemma~\ref{lem:local} (which used only that
+$\nu_\theta$ is real), $\rho$ is constant along this flow, so the closed-form multiplier
+$\eu^{\iu\tau\nu_\theta}$ \emph{is} the exact time-$\tau$ flow --- not an approximation to
+it. Each substep is therefore an exact Hamiltonian flow, hence symplectic;
+$\Flow^\theta_{\dt}$ is a composition of symplectic maps, and is time-symmetric by the
+palindromic ordering together with (2).
+
+\emph{(4).} $\Kop^\theta$ is linear, so it commutes with multiplication by the constant
+$\eu^{\iu c}$. And $\rho$ is phase-blind: $|\eu^{\iu c}\psi|^2 = |\psi|^2$. Hence
+$\nu_\theta$ is unchanged and $\Nop^\theta$, being multiplication by a $\psi$-independent
+(given $\rho$) pointwise factor, also commutes with the global phase. Composing,
+$\Flow^\theta(\eu^{\iu c}\psi) = \eu^{\iu c}\Flow^\theta(\psi)$.
+\end{proof}
+
+\begin{remark}[Two routes to (1)]
+Part (1) also follows from (3) and (4) by Noether's theorem: $\Ham_\theta$ depends on
+$\psi$ only through $|\widehat\psi|^2$ and $\rho$, so it is $U(1)$-invariant, and the
+conserved charge of that symmetry is $\Mass_h$. The direct modulus-one argument is the
+one the tests assert, because it holds mode by mode and grid point by grid point and is
+therefore checkable to machine precision.
+\end{remark}
+
+\subsection{The sharp, falsifiable prediction}
+\label{sec:sharpprediction}
+
+Part (3) is not decoration. It is the claim the study can be wrong about.
+
+\begin{corollary}[Bounded, not secular, energy error]
+\label{cor:boundedenergy}
+$\Flow^\theta$ does \emph{not} conserve the true Hamiltonian $\Ham$. What it does is
+integrate a \emph{learned} Hamiltonian $\Ham_\theta$ exactly-symplectically. By backward
+error analysis (Corollary~\ref{cor:modham} applied to $\Ham_\theta$), the drift in
+$\Ham_\theta$ is bounded; the drift in $\Ham$ is therefore governed by the fixed
+model-error term $\|\Ham_\theta - \Ham\|$ evaluated along the trajectory. That is a
+constant of the model, not a function of the horizon. \textbf{Prediction: energy drift is
+bounded and oscillatory, not secular.}
+\end{corollary}
+
+Phases 2--3 measured \emph{secular} energy drift for the FNO and for the mass-projected
+FNO in $9/9$ seed--model runs (Observation~\ref{obs:B}), so this prediction is falsifiable
+against a real baseline rather than against a straw man.
+
+\begin{remark}[The reversible-KAM caveat --- state it before the result comes in]
+\label{rem:kam}
+Symmetric \emph{and} reversible methods already enjoy bounded-energy results for
+reversible systems, independently of symplecticity. Model C2 is reversible but not
+symplectic (\S\ref{sec:c2}). It is therefore \textbf{unlikely that C1 and C2 separate on
+energy drift}, and a finding that they do not is not evidence against
+Corollary~\ref{cor:boundedenergy}. Frame the C1-vs-C2 comparison as \emph{sample
+efficiency versus expressivity}, not as a test of symplecticity.
+\end{remark}
+
+\subsection{C2 --- what survives a nonlocal phase}
+\label{sec:c2}
+
+Model C2 replaces the pointwise $\nu_\theta$ with an FNO reading the four real channels
+$(\rho, V, \alpha, \beta)$. The phase is now a \emph{nonlocal} functional of $\rho$.
+
+\begin{guarantee}[C2]
+\label{guar:c2}
+Parts (1), (2) and (4) of Theorem~\ref{thm:learnedmain} hold verbatim. Part (3) does not.
+\end{guarantee}
+
+\begin{proof}
+(1) and (4) used only that $\nu_\theta$ is real and phase-blind, both of which survive.
+(2) used that $\rho$ is unchanged by the local step --- and it is unchanged
+\emph{as an entire field}, not merely at the point being updated. A nonlocal $\nu$ reads
+the whole $\rho$ field, which is frozen, so the backward step still sees the identical
+phase field and still cancels exactly.
+
+For (3), the local generator $\partial_t\psi = \iu\nu[\rho]\psi$ is Hamiltonian iff
+$\nu$ is the functional derivative of some $G[\rho]$, i.e.\ iff its linearisation is
+self-adjoint:
+\[
+\frac{\delta\nu(x)}{\delta\rho(y)} \;=\; \frac{\delta\nu(y)}{\delta\rho(x)}
+\qquad\text{for all }x,y .
+\]
+This is a codimension-large symmetry condition on the operator, and an unconstrained FNO
+does not satisfy it. Hence C2's local substep is generically not the flow of a
+sub-Hamiltonian and the composition is not symplectic.
+\end{proof}
+
+\begin{remark}[C2 is the fair fight]
+Model A and Model C2 share the \emph{same backbone}, the same hyperparameters and
+essentially the same parameter count ($287{,}746$ vs $288{,}770$, a ratio of
+$1.004\times$). They differ in exactly one thing: whether the network's output \emph{is}
+the field, or is a \emph{phase applied to} the field. That is the cleanest available
+isolation of ``structure'' from ``capacity''. C1, at $2{,}466$ parameters, is $117\times$
+smaller than A --- which is why parameter counts must appear in every table.
+\end{remark}
+
+\subsection{C3 --- the control, and why ``irreversible'' would be the wrong word}
+\label{sec:c3}
+
+Model C3 feeds $\Real\psi$ and $\Imag\psi$ to the phase network instead of $\rho$.
+
+\begin{guarantee}[C3]
+\label{guar:c3}
+Part (1) of Theorem~\ref{thm:learnedmain} still holds --- the multiplier is still modulus
+one. Part (4) is destroyed outright. Part (2) degrades from \emph{exact} to
+\emph{second order}.
+\end{guarantee}
+
+\begin{proof}[Proof of the reversibility statement]
+Write the local step as $u\mapsto v = \eu^{\iu\dt\,\nu(u)}u$, where now $\nu$ depends on
+$u$ and not merely on $|u|$. The backward step gives
+\[
+\Nop_{-\dt}(v) \;=\; \eu^{-\iu\dt\,\nu(v)}v \;=\; \eu^{\,\iu\dt\,[\nu(u)-\nu(v)]}\,u .
+\]
+Now $v = u + O(\dt)$, indeed $v = u + \iu\dt\nu(u)u + O(\dt^2)$, so by smoothness of
+$\nu$,
+\[
+\nu(v) - \nu(u) \;=\; D\nu[u]\bigl(\iu\dt\,\nu(u)u\bigr) + O(\dt^2) \;=\; O(\dt).
+\]
+Hence the residual phase is $\dt\cdot O(\dt) = O(\dt^2)$, and it is generically nonzero,
+because $D\nu[u]$ applied to $\iu\nu(u)u$ --- a purely ``rotational'' perturbation ---
+vanishes only if $\nu$ happens to be phase-blind, which is exactly what C3 gives up.
+Since the kinetic halves are unitary and cancel exactly, the round-trip error of the full
+step is $O(\dt^2)$.
+\end{proof}
+
+\begin{observation}[Measured order $2.00$]
+\label{obs:c3order}
+At untrained weights, C3's forward--backward violation is $\approx1\times10^{-9}$ at
+$\dt=0.01$, against $\approx7\times10^{-16}$ and \emph{$\dt$-independent} for C1/C2. Its
+measured $\dt$-scaling is order $2.00$.
+\end{observation}
+
+\begin{trap}[Absolute thresholds hide power laws]
+\label{trap:thresholds}
+$10^{-9}$ is small enough that any fixed tolerance would call C3 ``reversible''. It is
+not; it is second-order. Regimes are therefore classified by \emph{measured $\dt$-scaling}
+--- $\log_2(e_{i+1}/e_i)$ compared against an expected order --- never by an absolute
+threshold. The defensible claim is:
+\begin{center}
+\emph{$\rho$-only parameter sharing makes reversibility \textbf{exact rather than
+second-order}}
+\end{center}
+and \emph{not} ``C3 is irreversible''.
+\end{trap}
+
+C3 has two jobs. It is the direct control for Model B --- both preserve mass and nothing
+else, at very different capacities --- and it is the \textbf{paired negative} proving the
+C1/C2 reversibility and $U(1)$ tests are not vacuous. A conservation test that would pass
+on a model with no such structure tests nothing.
+
+\subsection{The rate ladders: approximation versus optimisation}
+\label{sec:ladders}
+
+Both learned rates are, in truth, \emph{products}: $\kappa = -\alpha\cdot|k|^2$ and
+$\nu = \beta\cdot\rho - V$. A $\tanh$ MLP handed $(|k|^2,\alpha,\beta)$ or $(\rho,V)$ as
+features must \emph{discover} the bilinear form. Whether it can is a question about
+learning, not about expressivity, and the two must not be conflated. Hence two ladders:
+
+\begin{center}
+\begin{tabular}{@{}llp{0.52\linewidth}@{}}
+\toprule
+\textbf{rung} & \textbf{kinetic $\kappa$} & \textbf{what is handed to the network}\\
+\midrule
+\code{K0} & $\mathrm{MLP}(\widetilde{k^2},\alpha,\beta)$ & nothing --- must find the product\\
+\code{K1} & $\mathrm{MLP}(\widetilde{k^2},\,\alpha\widetilde{k^2},\,\alpha,\beta)$ & the product as an extra feature\\
+\code{K2} & $-\alpha|k|^2\bigl(1+\mathrm{MLP}(\cdot)\bigr)$ & the functional form; MLP only corrects\\
+\midrule
+\textbf{rung} & \textbf{local $\nu$} & \\
+\midrule
+\code{L0} & $\mathrm{MLP}(\rho,V;\alpha,\beta)$ & nothing\\
+\code{L1} & $\mathrm{MLP}(\rho,V,\beta\rho;\alpha,\beta)$ & the product $\beta\rho$\\
+\code{L2} & $\beta\rho - V + \mathrm{MLP}(\cdot)$ & the exact rate; MLP only corrects\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\code{K2} and \code{L2} are zero-initialised at the last layer, so they \emph{start} at
+the exact rate.
+
+\begin{remark}[Why \code{K0}/\code{L0} are the headline]
+A win above $\kwrap$ at \code{K2} is uninterpretable: the model was told the dispersion
+relation. A win at \code{K0} means it \emph{learned} it. The ladder is reported in full,
+because if \code{L0} cannot reach the floor that is itself a finding --- about how hard
+the learning problem is, distinct from how expressive the class is.
+\end{remark}
+
+\begin{observation}[The approximation floor of a free local rate]
+\label{obs:ladder}
+Measured on the production distribution, a free MLP plateaus at $2.1\%$ relative RMSE on
+$\nu$ (a wider, deeper one at $2.6\%$ --- an \emph{optimisation} limit, not a capacity
+one). End-to-end, with the kinetic rate held exact:
+\[
+\code{L0}: 1.18\,\epssplit,\qquad
+\code{L1}: 1.03\,\epssplit,\qquad
+\code{L2}: 0.93\,\epssplit .
+\]
+So a free local rate inflates C1's one-step error by $\sim$18\%, \emph{not} by the factor
+of $\sim$3 that a naive $\dt\cdot|\nu|\cdot e$ bound predicts --- the phase error is partly
+incoherent across the grid and does not accumulate as that bound assumes. \code{L2}
+landing slightly \emph{below} the floor is expected, and matches
+Observation~\ref{obs:floor}: a free correction to the generators absorbs a few percent of
+the Strang commutator.
+\end{observation}
+
+\begin{trap}[Normalise $|k|^2$ before it reaches a $\tanh$]
+At $N=64$, $|k|^2$ reaches $1024$ and saturates every $\tanh$ in the network. The
+kinetic MLP therefore consumes $\widetilde{k^2} = |k|^2/\max|k|^2$. The normaliser is
+\textbf{frozen at the training grid} when the model is rebound to a finer grid --- see
+Proposition~\ref{prop:frozennorm}.
+\end{trap}
+
+\subsection{Summary of guarantees}
+
+\begin{center}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+& \textbf{mass} & \textbf{reversibility} & \textbf{symplectic} & \textbf{$U(1)$}\\
+\midrule
+A \; (FNO) & --- & --- & --- & ---\\
+B \; (FNO $+$ projection) & exact & --- & --- & ---\\
+C1 (pointwise $\rho$ phase) & exact & exact & exact & exact\\
+C2 (FNO-on-$\rho$ phase) & exact & exact & --- & exact\\
+C3 (Re/Im $\psi$ phase) & exact & order $2$ & --- & ---\\
+\midrule
+reference (Strang) & exact & exact & exact & exact\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Every ``exact'' in this table is asserted in the test suite \textbf{at random untrained
+weights}, each with a paired negative demonstrating the test can fail. Positives bound the
+worst case ($\max < 10^{-13}$); negatives bound the best case ($\min > 10^{-6}$).
+
+\sourcenote{src/spno/models/split\_learned.py}
+\newpage
+\part*{Part III \quad Spectral identifiability --- the thesis spine}
+\addcontentsline{toc}{part}{Part III \; Spectral identifiability}
+
+\section{The one-step multiplier and what it can tell you}
+\label{sec:identifiability}
+
+The headline question of the study is \emph{architecture-relative identifiability}:
+
+\begin{quote}
+Single-$\alpha$ supervision makes $\omega(k)$ unrecoverable above
+$\kwrap = \sqrt{\pi/(\alpha\dt)}$ for \textbf{every} model --- a clean theorem.
+$\alpha$-varying supervision makes it recoverable \textbf{in principle}, because
+$\partial_\alpha\arg m(k,\alpha) = -k^2\dt$ is wrap-free. The question is which hypothesis
+classes actually extract it. \emph{The data contains it; only the right inductive bias
+gets it out.}
+\end{quote}
+
+This section proves both halves.
+
+\subsection{The probe}
+
+\begin{definition}[One-step multiplier]
+\label{def:multiplier}
+Fix a constant potential $V\equiv V_0$, an amplitude $A$, and parameters $(\alpha,\beta)$.
+For any one-step map $\Flow$ (a trained model or the reference solver), let
+\[
+m(k) \;=\; \frac{\widehat{\Flow(\psi)}(k)}{\widehat{\psi}(k)},
+\qquad \psi = A\,\eu^{\iu k\cdot x}.
+\]
+\end{definition}
+
+\begin{proposition}[The splitting is \emph{exact} on plane waves in a constant potential]
+\label{prop:strangexactpw}
+For $V\equiv V_0$ and $\psi = A\eu^{\iu kx}$, the single Strang step, the substepped
+reference, and the exact flow all coincide:
+\[
+\Flow_{\dt}\psi \;=\; \Flow^{\mathrm{ref}}_{\dt}\psi \;=\; \eu^{-\iu\omega\dt}\,\psi,
+\qquad \omega = \alpha|k|^2 - \beta A^2 + V_0 .
+\]
+\end{proposition}
+
+\begin{proof}
+$\Kop_{\dt/2}\psi = \eu^{-\iu\alpha|k|^2\dt/2}\psi$, a \emph{constant} multiple of $\psi$,
+so the midpoint state has $\rho \equiv A^2$, constant in $x$. The local phase
+$\eu^{\iu(\beta A^2-V_0)\dt}$ is therefore also a constant multiple. Composing the three
+constants gives $\eu^{-\iu(\alpha|k|^2 - \beta A^2 + V_0)\dt}$. The same argument applies
+to each substep of $\Flow^{\mathrm{ref}}$, and the constants compose to the same total.
+By Proposition~\ref{prop:planewave} this is the exact flow.
+\end{proof}
+
+\begin{remark}[The floor for probe residuals is roundoff, not $\epssplit$]
+\label{rem:proberesidualfloor}
+Proposition~\ref{prop:strangexactpw} has a sharp consequence that is easy to get wrong:
+$\epssplit = 6.239\times10^{-5}$ was measured on \emph{random band-limited fields}, where
+$\rho$ varies in $x$ and the commutator is nonzero. It is \textbf{not} the floor for
+dispersion-probe residuals. On plane waves in a constant potential the floor is
+\code{float64} roundoff, $\sim10^{-13}$ in $\omega$ at $\dt=0.01$, and the probe
+self-validation gate is set accordingly at $10^{-10}$.
+\end{remark}
+
+\begin{remark}[What the probe is \emph{not}]
+Three limits, each load-bearing and each stated in the thesis rather than buried:
+\begin{enumerate}[label=(\roman*),leftmargin=1.8em,itemsep=0.2em]
+\item Plane waves are \textbf{out of distribution} for every model here --- all are
+trained on random band-limited fields. This probes the \emph{learned operator}, not
+generalisation.
+\item The probe is valid for \textbf{constant $V_0$ only}, because that is the only case
+in which a plane wave is an exact solution.
+\item The branch lift (\S\ref{sec:wraptheorem}) selects the branch \emph{using the truth}.
+Below $\kwrap$ the branch index is zero and the lift is a consistency check; above it the
+lift is an assist and the ``recovered'' $\omega$ is not an independent measurement. That
+asymmetry \emph{is} the G5a result, not a defect in the instrument.
+\end{enumerate}
+\end{remark}
+
+\subsection{The probe amplitude must not smuggle in a mass shift}
+\label{sec:probeamp}
+
+By \eqref{eq:dispersion}, $\omega$ depends on the amplitude through $\beta A^2$; by
+Proposition~\ref{prop:pwmass}, the plane wave's mass is $A^2\prod_j L_j$. A probe
+amplitude outside the training mass distribution therefore makes every high-$k$ reading a
+measurement of \emph{two} shifts at once --- spectral and mass --- with no way to
+attribute the failure.
+
+\begin{definition}[Probe amplitude]
+With the training mass range $[M_-,M_+]$ and $\overline{M}=\tfrac12(M_-+M_+)$,
+\[
+A \;=\; \sqrt{\overline{M}\,\Big/\!\prod_j L_j} .
+\]
+For the production configuration, $M\in[1,3]$ and $\prod L_j = 2\pi$, so
+$A = \sqrt{2/(2\pi)} \approx 0.5642$.
+\end{definition}
+
+\subsection{The negative theorem}
+\label{sec:wraptheorem}
+
+\begin{theorem}[Single-$\alpha$ ambiguity]
+\label{thm:wrap}
+Let the supervision consist of one-step data at a \textbf{fixed} $\alpha$ and fixed
+$\dt$. Then for each mode $k$, the data determine $\omega(k)$ only modulo $2\pi/\dt$.
+Writing the principal branch
+\[
+\omega_{\mathrm{princ}}(k) \;=\; -\frac{\arg m(k)}{\dt} \;\in\; \Bigl[-\frac{\pi}{\dt},\,\frac{\pi}{\dt}\Bigr),
+\]
+one has $\omega_{\mathrm{princ}}(k) = \omega(k)$ if and only if $|\omega(k)|\dt \le\pi$.
+In particular, with the kinetic term dominant, the horizon is
+\begin{equation}
+\label{eq:kwrap}
+\boxed{\;\kwrap \;=\; \sqrt{\frac{\pi}{\alpha\,\dt}}\;}
+\end{equation}
+and above it the branch is \textbf{genuinely unrecoverable} from the data --- for every
+model, of every architecture.
+\end{theorem}
+
+\begin{proof}
+The only thing a one-step map on a plane wave reveals about mode $k$ is the complex
+number $m(k)$, and by Proposition~\ref{prop:strangexactpw} the ground truth is
+$m(k)=\eu^{-\iu\omega(k)\dt}$. The map $\omega\mapsto\eu^{-\iu\omega\dt}$ is
+$2\pi/\dt$-periodic, so $m(k)$ determines $\omega(k)$ exactly up to that period. The
+principal-branch statement is the definition of $\arg$ taking values in $(-\pi,\pi]$.
+Setting $|\omega|\dt=\pi$ with $\omega\approx\alpha k^2$ and solving for $k$ gives
+\eqref{eq:kwrap}.
+\end{proof}
+
+\begin{corollary}[Multi-step data at the same $\dt$ adds nothing]
+\label{cor:multistep}
+Let $m_n(k)$ be the $n$-step multiplier. Then $m_n = m^n$, so $m_n$ is a deterministic
+function of $m$: the $n$-step observation is measurable with respect to the $\sigma$-algebra
+generated by the one-step observation and carries no additional information about
+$\omega$. (Conversely $m_n$ determines $m$ only up to an $n$-th root, so it is strictly
+weaker.)
+\end{corollary}
+
+\begin{proof}
+A plane wave in a constant potential remains a plane wave of the same amplitude under the
+flow (Proposition~\ref{prop:strangexactpw}), so iterating multiplies the coefficient by
+$m$ each time.
+\end{proof}
+
+\subsection{The alias family, constructed}
+\label{sec:alias}
+
+Theorem~\ref{thm:wrap} has a constructive shadow that makes it testable.
+
+\begin{proposition}[Indistinguishable $\alpha$ values at a given mode]
+\label{prop:alias}
+Fix $k$ and $\dt$. Define the alias family
+\begin{equation}
+\label{eq:aliasfamily}
+\alpha_n \;=\; \alpha_0 \;+\; \frac{2\pi n}{k^2\dt},\qquad n\in\Z .
+\end{equation}
+Then $m(k;\alpha_n) = m(k;\alpha_0)$ for every $n$: the one-step map restricted to mode
+$k$ is \textbf{identical} across the family.
+\end{proposition}
+
+\begin{proof}
+$\arg m(k;\alpha) = -(\alpha k^2 - \beta A^2 + V_0)\dt$. Replacing $\alpha_0$ by
+$\alpha_0 + 2\pi n/(k^2\dt)$ changes the argument by $-2\pi n$, i.e.\ not at all as a
+complex number.
+\end{proof}
+
+\begin{observation}[The computed family at $k=30$]
+\label{obs:alias}
+With $\dt=0.01$, $k=30$: $2\pi/(k^2\dt) = 2\pi/9 = 0.69813$, so from $\alpha_0=0.9$ the
+family runs $\{0.9,\;0.20187,\;-0.49627,\dots\}$. The test asserts a bit-identical map
+across these values, with the offsets \emph{computed}, never hardcoded --- the spec's
+rounded literals $(0.2019, -0.4963)$ carry $\sim7\times10^{-5}$ of residual $\alpha$,
+which moves the phase at $k=30$ far above the assertion tolerance.
+\end{observation}
+
+\begin{remark}[The ambiguity is per-mode, and that is the right statement]
+\label{rem:permode}
+No single $\alpha' \ne \alpha$ aliases at \emph{every} $k$ simultaneously, since
+\eqref{eq:aliasfamily} demands $\alpha'-\alpha = 2\pi n_k/(k^2\dt)$ with $n_k$ integer for
+all $k$ at once, which fails already for two coprime $k$. So Theorem~\ref{thm:wrap} is
+not a claim that the \emph{scalar} $\alpha$ is unidentifiable --- a model that has the
+form $\omega = \alpha k^2 + \dots$ baked in can pin $\alpha$ down from low $k$ and then
+predict high $k$ correctly. It is a claim about \textbf{nonparametric recovery of the
+curve $\omega(k)$}: an unconstrained model has no reason to prefer one branch at large
+$k$, because every branch fits the data exactly.
+
+\emph{This is precisely why the theorem is interesting for a study about inductive bias,
+and precisely why \code{K0} rather than \code{K2} is the headline rung.} \code{K2} is
+handed the functional form and therefore escapes the ambiguity by assumption; \code{K0}
+must discover it.
+\end{remark}
+
+\subsection{The positive theorem: the $\alpha$-derivative is wrap-free}
+\label{sec:alphaderiv}
+
+\begin{theorem}[$\alpha$-derivative identifiability]
+\label{thm:alphaderiv}
+For every $k$, including $k>\kwrap$,
+\begin{equation}
+\label{eq:alphaderiv}
+\frac{\partial}{\partial\alpha}\arg m(k,\alpha) \;=\; -k^2\dt ,
+\end{equation}
+with $\beta$ and $V_0$ dropping out entirely. Moreover the derivative can be estimated
+from \emph{wrapped} data without any unwrapping: for a grid $\alpha_0<\alpha_1<\dots$ with
+gaps $\Delta\alpha_j$,
+\[
+\arg\bigl(m_{j+1}\,\overline{m_j}\bigr) \;=\; -\Delta\alpha_j\,k^2\dt
+\qquad\text{exactly, provided}\qquad
+\boxed{\;|\Delta\alpha_j|\;k^2\,\dt \;<\;\pi\;}
+\]
+\end{theorem}
+
+\begin{proof}
+From $\arg m(k,\alpha) = -(\alpha k^2 - \beta A^2 + V_0)\dt$ (as a real-valued lift),
+differentiating in $\alpha$ gives \eqref{eq:alphaderiv}; the $\beta$ and $V_0$ terms are
+$\alpha$-independent and vanish.
+
+For the estimator: $m_{j+1}\overline{m_j}$ is a complex number whose true argument is
+$-\Delta\alpha_j k^2\dt$. The function $\arg$ returns the representative in $(-\pi,\pi]$,
+so it returns \emph{exactly} that value if and only if
+$|\Delta\alpha_j k^2\dt| \le \pi$. Thus consecutive wrapped increments equal the true
+increments under the stated condition, and no phase unwrapping --- and in particular no
+reference to the truth --- is required.
+\end{proof}
+
+Theorem~\ref{thm:alphaderiv} is why identifiability survives above $\kwrap$ under
+$\alpha$-varying supervision even though the \emph{absolute} phase does not. The
+information is present in the data. Whether a given hypothesis class extracts it is an
+empirical question --- experiment \textbf{G5b}, the central result of the study.
+
+\begin{remark}[The precondition is checked, not assumed]
+The estimator's precondition is verified on the caller's own $\alpha$ grid before any
+measurement is taken, and the function raises otherwise. The dataset's realised gap is
+$\Delta\alpha_{\max} = 3.467\times10^{-3}$; the requirement at $k=32$ is
+$\Delta\alpha < \pi/(k^2\dt) = \pi/10.24 = 0.3068$. The margin is a factor of $\sim$88. A
+\emph{probe} that chooses its own coarser spacing, however, can silently violate it and
+return garbage --- hence the check.
+\end{remark}
+
+\subsection{$\alpha$-continuation is a different claim}
+\label{sec:continuation}
+
+Accumulating wrapped increments from an anchor gives the \emph{absolute} frequency:
+\[
+\arg m(k,\alpha_J) \;\overset{\text{lift}}{=}\; \arg m(k,\alpha_0)
+\;+\;\sum_{j=0}^{J-1}\arg\bigl(m_{j+1}\overline{m_j}\bigr),
+\qquad \omega = -\frac{(\cdot)}{\dt}.
+\]
+
+\begin{proposition}[Anchor condition]
+\label{prop:anchor}
+This recovers the true $\omega(k,\alpha_J)$ provided (i) the gap condition of
+Theorem~\ref{thm:alphaderiv} holds on every step, and (ii) the anchor is itself unwrapped:
+$|\omega(k,\alpha_0)|\,\dt \le \pi$.
+\end{proposition}
+
+Condition (ii) forces the anchor toward $\alpha_0\approx 0$ for large $k$ --- far outside
+the training range $[0.7,1.1]$. As noted in \S\ref{sec:fno}, $\alpha = 0$ enters an FNO's
+lift channel at $\tilde\alpha=-4.5$. \textbf{A failure of $\alpha$-continuation is
+therefore evidence about $\alpha$-extrapolation, not about whether the
+$\alpha$-derivative information was extracted}, and the two must be reported as separate
+claims. Theorem~\ref{thm:alphaderiv} deliberately requires \emph{in-range} $\alpha$ only.
+
+\subsection{Multi-$\dt$ as a second route past the horizon}
+
+\begin{proposition}[Two step sizes]
+\label{prop:multidt}
+Observing the one-step multiplier at step sizes $\dt_1,\dt_2$ determines $\omega$ modulo
+the generator of the lattice $\tfrac{2\pi}{\dt_1}\Z \,\cap\, \tfrac{2\pi}{\dt_2}\Z$,
+i.e.\ modulo $\operatorname{lcm}\!\bigl(\tfrac{2\pi}{\dt_1},\tfrac{2\pi}{\dt_2}\bigr)$.
+\end{proposition}
+
+\begin{corollary}[A dyadic ladder buys only its smallest step]
+\label{cor:dyadic}
+For $\dt \in\{0.005,\,0.01,\,0.02\}$ the periods are $\{400\pi,\,200\pi,\,100\pi\}$, each
+an integer multiple of the next, so their lcm is $400\pi$ --- the period of the smallest
+$\dt$ alone. \textbf{The two coarser step sizes add no identifiability whatsoever.} The
+horizon extends only as
+\[
+\kwrap(\dt) = \sqrt{\pi/(\alpha\dt)} \;\propto\; \dt^{-1/2},
+\]
+i.e.\ by $\sqrt2$ per halving: from $16.9$ at $\dt=0.01$ to $23.9$ at $\dt=0.005$
+(for $\alpha=1.1$).
+\end{corollary}
+
+\begin{remark}
+This is worth stating explicitly because it is counterintuitive and cheap to get wrong.
+If the goal of the multi-$\dt$ arm (G6) were \emph{identifiability}, the step sizes should
+be chosen \emph{incommensurate} --- then the lcm is enormous and the combined horizon far
+exceeds either alone. As specified, G6's dyadic ladder is best understood as a test of
+\textbf{$\dt$-transfer} (does a model trained at one $\dt$ work at another?), which is a
+different and equally legitimate question; and $\dt$-transfer is meaningful only for the
+split-step family, where $\dt$ genuinely multiplies a learned rate. An FNO ignores its
+$\dt$ argument, so a transfer number measured on one is an artefact
+(Remark~\ref{rem:fnodt}).
+\end{remark}
+
+\subsection{The horizon is arm-dependent}
+
+$\kwrap$ is a function of $\alpha$, so widening the $\alpha$ range \emph{moves} the
+horizon. On the production configuration $\alpha\in[0.7,1.1]$, $\dt=0.01$:
+\[
+\kwrap \in\bigl[\sqrt{\pi/0.011},\;\sqrt{\pi/0.007}\bigr] = [16.90,\,21.19].
+\]
+The G2 extrapolation arm ($\alpha\in[0.5,1.5]$) spans $[14.47,\,25.07]$. Every plot must
+therefore draw \emph{its own arm's} horizon rather than a single global line, and the
+banded-error edges must be recomputed per arm. The relevant scales for the production
+configuration are
+\[
+\ktrain = 8 \;<\; \kwrap \in[16.9,\,21.2] \;<\; \knyq = 32 .
+\]
+
+\sourcenote{src/spno/evaluation/dispersion.py, src/spno/equations/nls.py, src/spno/data/shift.py}
+
+\section{Spectral diagnostics}
+\label{sec:spectraldiag}
+
+Field-space $L^2$ hides both failures this study is about. A model can have small relative
+$L^2$ while getting the \emph{dispersion relation} wrong --- error concentrated in a few
+high-$k$ modes barely moves the norm --- and phase error is invisible to any metric that
+looks only at $|\psi|$.
+
+\subsection{Per-mode and banded error}
+
+\[
+E(k) \;=\; \Bigl\langle\, \bigl|\widehat{\psi}^{\mathrm{pred}}_k - \widehat{\psi}^{\mathrm{true}}_k\bigr| \,\big/\, \bigl|\widehat{\psi}^{\mathrm{true}}_k\bigr| \,\Bigr\rangle_{\text{batch}},
+\qquad
+E_{[a,b)} = \Bigl\langle \frac{\|\mathbf{1}_{[a,b)}(\widehat{\psi}^{\mathrm{pred}}-\widehat{\psi}^{\mathrm{true}})\|}{\|\mathbf{1}_{[a,b)}\widehat{\psi}^{\mathrm{true}}\|}\Bigr\rangle .
+\]
+Normalising per mode is what makes low-energy high-$k$ modes visible at all; the absolute
+version is dominated by whichever modes carry the energy. Default band edges are
+$\ktrain=8$ and $\kwrap=16.9$.
+
+\subsection{Amplitude and phase separate exactly}
+
+\begin{proposition}[Exact amplitude--phase decomposition]
+\label{prop:ampphase}
+With $p = \widehat\psi^{\mathrm{pred}}$, $t = \widehat\psi^{\mathrm{true}}$ and
+$\Delta\varphi = \arg p - \arg t$,
+\[
+\underbrace{\sum_k|p_k-t_k|^2}_{\text{total}^2}
+\;=\;
+\underbrace{\sum_k\bigl(|p_k|-|t_k|\bigr)^2}_{\text{amplitude}^2}
+\;+\;
+\underbrace{2\sum_k |p_k||t_k|\bigl(1-\cos\Delta\varphi_k\bigr)}_{\text{phase}^2},
+\]
+and the phase term is nonnegative, vanishing exactly when the phases agree.
+\end{proposition}
+
+\begin{proof}
+$|p-t|^2 = |p|^2+|t|^2-2\Real(p\bar t) = (|p|-|t|)^2 + 2|p||t| - 2|p||t|\cos\Delta\varphi$.
+Sum over $k$.
+\end{proof}
+
+So taking the phase part as $\sqrt{\text{total}^2-\text{amplitude}^2}$, as
+\code{amplitude\_and\_phase\_split} does, is not a heuristic residual. It is exactly
+\[
+\Bigl(2\textstyle\sum_k|p_k||t_k|\bigl(1-\cos\Delta\varphi_k\bigr)\Bigr)^{1/2}
+\;\approx\;
+\Bigl(\textstyle\sum_k|p_k||t_k|\,\Delta\varphi_k^2\Bigr)^{1/2}
+\]
+for small phase errors.
+
+\begin{trap}[Never reduce a phase-error curve with \texttt{max}]
+\label{trap:phasemax}
+$\Delta\varphi_k$ is meaningful only where the target carries energy. In an \emph{empty}
+mode the phase is roundoff noise, distributed uniformly on $(-\pi,\pi]$, so a bare
+$\max_k$ reports $O(1)$ regardless of model quality. The scalar summary must be the
+amplitude-weighted mean \emph{across modes},
+\[
+\overline{\Delta\varphi} \;=\; \frac{\sum_k |t_k|\,|\Delta\varphi_k|}{\sum_k|t_k|}.
+\]
+\end{trap}
+
+\subsection{The G7 normalisation}
+
+Fixing $\alpha$ makes the one-step task easier at \emph{every} $k$, so absolute $E(k)$
+falls across the board and an absolute comparison cannot separate the three causes of
+high-$k$ failure listed in \S\ref{sec:highk}. Only the ratio isolates cause (b):
+\[
+\text{band ratio} \;=\; \frac{E_{[\,\text{high},\infty)}}{E_{[0,\,\text{low})}},
+\]
+and even then only once cause (a) is removed by matching $m$ to Nyquist. This is a
+\emph{numerical observation} on a trained model; it says nothing at untrained weights.
+
+\subsection{The nonlinear cascade}
+
+Initial conditions are band-limited to $|k|\le 8$ \emph{exactly} (a sharp cutoff, not a
+Gaussian roll-off --- see \S\ref{sec:datadesign}), so every mode above the cutoff starts
+empty and any energy found there is genuine nonlinear transfer through $\beta|\psi|^2\psi$.
+A model that gets one-step $L^2$ right while failing to cascade is a failure that
+field-space $L^2$ cannot see.
+
+\begin{observation}[The cascade is real but stays below the horizon]
+\label{obs:cascade}
+On the training split: energy fraction above $\ktrain=8$ grows from $8.3\times10^{-6}$ at
+step 1 to $2.7\times10^{-4}$ at step 200. Above $\kwrap$ it stays at
+$\sim5\times10^{-7}$ to $2.4\times10^{-6}$ throughout. So in-distribution rollouts do
+\emph{not} silently become spectral-extrapolation runs --- which is what makes G1 a clean
+control. Measured, not assumed.
+\end{observation}
+
+\sourcenote{src/spno/evaluation/spectral.py, src/spno/data/generate.py}
+\newpage
+\part*{Part IV \quad The soft baseline and the misspecification dials}
+\addcontentsline{toc}{part}{Part IV \; Soft baseline and misspecification}
+
+\section{The PINO residual --- and the invariant it smuggles in}
+\label{sec:pino}
+
+\subsection{The discrete midpoint residual}
+
+\begin{definition}[Crank--Nicolson / midpoint residual]
+\label{def:cnresidual}
+With $\overline\psi = \tfrac12(\psi_{n+1}+\psi_n)$ and
+$\overline\rho = \tfrac12\bigl(|\psi_{n+1}|^2+|\psi_n|^2\bigr)$,
+\[
+R \;=\; \iu\,\frac{\psi_{n+1}-\psi_n}{\dt}
+\;+\; \alpha\,\lap_h\overline\psi
+\;+\; \beta\,\overline\rho\,\overline\psi
+\;-\; V\,\overline\psi .
+\]
+The Laplacian is spectral, so it is exact for every mode the grid represents.
+\end{definition}
+
+The nonlinear term is averaged in the \emph{Delfour--Fortin--Payre} form
+$\overline\rho\cdot\overline\psi$ rather than, say, $|\overline\psi|^2\overline\psi$. That
+choice is what makes the scheme discretely mass-conserving --- and it is exactly the
+problem.
+
+\subsection{The confound, proved}
+
+\begin{theorem}[Cayley transform: the CN update has modulus exactly one]
+\label{thm:cayley}
+Let $\psi_n = A\eu^{\iu kx}$ with constant $V\equiv V_0$, and let $\psi_{n+1}=z\psi_n$ with
+$|z|=1$ (so that $\overline\rho = A^2$). Then $R\equiv 0$ if and only if
+\begin{equation}
+\label{eq:cayley}
+z \;=\; \frac{1-\iu\,\omega\dt/2}{1+\iu\,\omega\dt/2},
+\qquad \omega = \alpha k^2 - \beta A^2 + V_0,
+\end{equation}
+and this $z$ satisfies $|z| = 1$ \textbf{exactly}, for every $\dt$ and every $\omega$.
+\end{theorem}
+
+\begin{proof}
+With $\psi_{n+1}=z\psi_n$, $\overline\psi = \tfrac{1+z}{2}\psi_n$, $\lap_h\psi_n = -k^2\psi_n$
+and $\overline\rho = A^2$:
+\[
+\frac{R}{\psi_n} \;=\; \iu\,\frac{z-1}{\dt} \;+\; \bigl(-\alpha k^2 + \beta A^2 - V_0\bigr)\frac{1+z}{2}
+\;=\; \iu\,\frac{z-1}{\dt} \;-\; \omega\,\frac{1+z}{2}.
+\]
+Setting this to zero and writing $a=\omega\dt/2$ gives $\iu(z-1) = a(1+z)$, hence
+$z(\iu - a) = a+\iu$ and
+\[
+z \;=\; \frac{a+\iu}{\iu-a} \;=\; \frac{1-\iu a}{1+\iu a},
+\]
+which is \eqref{eq:cayley}. Its modulus is $|1-\iu a|/|1+\iu a| = \sqrt{1+a^2}/\sqrt{1+a^2}=1$.
+\end{proof}
+
+\begin{corollary}[The physics loss contains the invariant under study]
+\label{cor:pinoconfound}
+On plane waves the CN residual is exactly solved by a \emph{unitary} update. More
+generally the DFP-averaged scheme conserves the discrete mass. \textbf{The 7a physics
+loss therefore smuggles in the very invariant the study compares methods on.}
+\end{corollary}
+
+This is not a reason to avoid the baseline --- it is precisely what the
+loss/projection/architecture distinction exists to expose --- but it must be stated in the
+thesis \emph{next to every 7a number}.
+
+\begin{corollary}[The scheme's own frequency]
+\label{cor:cnfreq}
+Writing $z = \eu^{-\iu\omega_{\mathrm{CN}}\dt}$ and inverting \eqref{eq:cayley},
+\[
+\boxed{\;\omega_{\mathrm{CN}} \;=\; \frac{2}{\dt}\arctan\!\Bigl(\frac{\omega\dt}{2}\Bigr)\;}
+\]
+\end{corollary}
+
+\begin{proof}
+$\arg\frac{1-\iu a}{1+\iu a} = -2\arctan a$ with $a=\omega\dt/2$, so
+$\omega_{\mathrm{CN}}\dt = 2\arctan(\omega\dt/2)$.
+\end{proof}
+
+\begin{trap}[A test that feeds the analytic plane wave and expects zero tests the wrong
+thing]
+The scheme's own exact solution advances at $\omega_{\mathrm{CN}}$, not at $\omega$. The
+gap between them \emph{is} the scheme's $O(\dt^2)$ truncation error, and a residual test
+must be built around Corollary~\ref{cor:cnfreq}, not around $\eu^{-\iu\omega\dt}$.
+\end{trap}
+
+\subsection{The residual is second order --- with the coefficient derived}
+
+\begin{proposition}[Residual expansion]
+\label{prop:residualexpansion}
+Feeding the residual the \emph{analytic} pair $\psi_{n+1} = \eu^{-\iu\omega\dt}\psi_n$
+gives, with $\theta = \omega\dt$,
+\[
+\frac{R}{\psi_n}
+\;=\; \frac{1}{\dt}\Bigl[\tfrac{1}{12}\theta^3 \;-\; \tfrac{\iu}{24}\theta^4 \;-\; \tfrac{1}{80}\theta^5 \;+\; O(\theta^6)\Bigr],
+\]
+that is
+\[
+\Real\!\Bigl(\frac{R}{\psi_n}\Bigr) = \frac{\omega^3\dt^2}{12} + O(\dt^4),
+\qquad
+\Imag\!\Bigl(\frac{R}{\psi_n}\Bigr) = -\frac{\omega^4\dt^3}{24} + O(\dt^5).
+\]
+The next real term is $-\omega^5\dt^4/80$, so the leading coefficient is recovered only up
+to a \emph{relative} correction of order $\tfrac{12}{80}(\omega\dt)^2 = 0.15\,(\omega\dt)^2$.
+\end{proposition}
+
+\begin{proof}
+From the proof of Theorem~\ref{thm:cayley} with $z=\eu^{-\iu\theta}$,
+\[
+\frac{R}{\psi_n}\;=\;\frac{1}{\dt}\Bigl[\iu\bigl(\eu^{-\iu\theta}-1\bigr) \;-\; \frac{\theta}{2}\bigl(1+\eu^{-\iu\theta}\bigr)\Bigr].
+\]
+Expand $\eu^{-\iu\theta} = 1 - \iu\theta - \tfrac{\theta^2}{2} + \tfrac{\iu\theta^3}{6} + \tfrac{\theta^4}{24} - \tfrac{\iu\theta^5}{120}+\cdots$. Then
+\[
+\iu\bigl(\eu^{-\iu\theta}-1\bigr) = \theta - \tfrac{\iu\theta^2}{2} - \tfrac{\theta^3}{6} + \tfrac{\iu\theta^4}{24} + \tfrac{\theta^5}{120},
+\]
+\[
+\tfrac{\theta}{2}\bigl(1+\eu^{-\iu\theta}\bigr) = \theta - \tfrac{\iu\theta^2}{2} - \tfrac{\theta^3}{4} + \tfrac{\iu\theta^4}{12} + \tfrac{\theta^5}{48}.
+\]
+Subtracting, the $\theta$ and $\theta^2$ terms cancel identically and
+\[
+\theta^3\Bigl(-\tfrac16+\tfrac14\Bigr) + \iu\theta^4\Bigl(\tfrac1{24}-\tfrac1{12}\Bigr) + \theta^5\Bigl(\tfrac1{120}-\tfrac1{48}\Bigr)
+= \tfrac{\theta^3}{12} - \tfrac{\iu\theta^4}{24} - \tfrac{\theta^5}{80}.
+\]
+Dividing by $\dt$ and substituting $\theta = \omega\dt$ gives the stated expansion.
+\end{proof}
+
+\subsection{Normalising the loss}
+
+\[
+\mathcal{L}_{\mathrm{phys}} \;=\; \Bigl\langle \frac{\|R\|_{L^2_h}}{\|\psi_n\|_{L^2_h}\,/\,\dt}\Bigr\rangle_{\text{batch}} .
+\]
+The normalisation makes the weight $\lambda$ comparable across $\dt$ and across mass ---
+both of which vary by design. An \emph{un}normalised residual weight becomes
+uninterpretable the moment the multi-$\dt$ arm exists, and would quietly turn the
+objective into a mass-weighted one. The $\lambda$ sweep $\{0.01,0.1,1,10\}$ is reported in
+full, never as a tuned value.
+
+\sourcenote{src/spno/losses/pde\_residual.py}
+
+\section{Misspecification --- moving the truth outside the constrained class}
+\label{sec:misspec}
+
+Phase 9 is the only phase that makes ``structure beats FNO'' a \emph{question} rather than
+a tautology, because it moves the data-generating equation outside the hypothesis class of
+the structured models. Two dials, each breaking a different assumption, each recovering
+exact NLS at zero.
+
+\subsection{Dial 1 --- nonlocal nonlinearity (breaks locality)}
+
+\begin{definition}[Nonlocal generator]
+\label{def:nonlocal}
+Replace the local rate by
+\[
+\nu \;=\; \beta\,(W_\sigma * \rho) \;-\; V,
+\qquad
+\widehat{W_\sigma}(k) \;=\; \eu^{-\sigma^2|k|^2/2}.
+\]
+\end{definition}
+
+\begin{proposition}[The kernel is a unit-mass symmetric mollifier for every $\sigma$]
+\label{prop:kernel}
+$\widehat{W_\sigma}(0) = 1$ exactly, so $\int W_\sigma = 1$ and the kernel never rescales
+the mean density; $\widehat{W_\sigma}$ is real and even in $k$, so $W_\sigma$ is real and
+symmetric; and $\sigma\to0$ gives $\widehat{W}\to1$, i.e.\ a delta, \emph{by construction}
+rather than in a limit that has to be argued.
+\end{proposition}
+
+\begin{guarantee}[Mass and $U(1)$ survive]
+$\nu$ is real, so the local substep is still a modulus-one multiplier: discrete mass is
+preserved exactly and global $U(1)$ equivariance survives, for every $\sigma$. Model B's
+projection therefore remains \emph{correct} under this dial.
+\end{guarantee}
+
+\begin{theorem}[The dynamics remain Hamiltonian]
+\label{thm:nonlocalham}
+For symmetric $W$, the local substep of Definition~\ref{def:nonlocal} is still the exact
+flow of a sub-Hamiltonian, namely
+\[
+\Ham_N \;=\; -\frac{\beta}{2}\iint \rho(x)\,W(x-y)\,\rho(y)\dd x\dd y \;+\; \int V\rho\dd x .
+\]
+Hence the composition is still symplectic, and $\rho$ is still frozen along the flow.
+\textbf{What is broken is locality, and nothing else.}
+\end{theorem}
+
+\begin{proof}
+Let $G[\rho] = \tfrac{\beta}{2}\iint\rho(x)W(x-y)\rho(y)$. Then
+\[
+\frac{\delta G}{\delta\rho(x)} = \frac{\beta}{2}\Bigl(\int W(x-y)\rho(y)\dd y + \int \rho(y)W(y-x)\dd y\Bigr)
+= \beta\,(W*\rho)(x),
+\]
+where the two terms combine into one \emph{only because} $W(x-y)=W(y-x)$. So
+$\delta(-G+\int V\rho)/\delta\rho = -\bigl[\beta(W*\rho) - V\bigr] = -\nu$, and by the
+computation in the proof of Theorem~\ref{thm:learnedmain}(3),
+$\delta\Ham_N/\delta\bar\psi = (\delta\Ham_N/\delta\rho)\,\psi = -\nu\psi$, which generates
+$\partial_t\psi = \iu\nu\psi$. Since $\nu$ is real, $\rho$ is frozen
+(Lemma~\ref{lem:local}) and the closed-form multiplier is the exact flow.
+\end{proof}
+
+\begin{remark}[Why this dial separates C1 from C2]
+C1's $\nu_\theta$ is \emph{pointwise} in $\rho$ and therefore \textbf{cannot represent}
+$\beta(W_\sigma*\rho)$ for $\sigma>0$: the truth has left C1's class. C2's $\nu_\theta$ is
+an FNO on $\rho$ and \emph{can}. This is the cleanest available separation of the two, and
+it is why the dial was chosen.
+\end{remark}
+
+\begin{remark}[Deliberately \emph{not} a saturable or quintic nonlinearity]
+$\nu_\theta$ is already a free function of the scalar $\rho$, so the C family learns
+$\nu=\beta\rho/(1+s\rho)$ or $\nu = \beta\rho + c\rho^2$ easily. Those are not
+misspecifications at all --- they are inside the class. Only breaking \emph{locality} or
+breaking \emph{conservation} moves the truth out.
+\end{remark}
+
+\subsection{Dial 2 --- weak gain/loss (breaks conservation itself)}
+
+\begin{definition}[Gain/loss generator]
+\label{def:gainloss}
+\[
+\iu\psi_t + \alpha\lap\psi + \beta|\psi|^2\psi - V\psi \;=\; +\,\iu\gamma\,\psi ,
+\qquad\text{i.e.}\qquad
+\psi_t = \gamma\psi + \iu\bigl(\alpha\lap\psi+\beta|\psi|^2\psi-V\psi\bigr).
+\]
+\end{definition}
+
+\begin{theorem}[Mass grows at a fixed exponential rate]
+\label{thm:gainloss}
+Along \eqref{def:gainloss},
+\[
+\boxed{\;\frac{\dd}{\dd t}\ln\Mass \;=\; 2\gamma\;}
+\]
+\end{theorem}
+
+\begin{proof}
+$\frac{\dd}{\dd t}\!\int|\psi|^2 = \int 2\Real(\bar\psi\psi_t)
+= \int 2\Real\bigl(\gamma|\psi|^2\bigr) + \int 2\Real\bigl(\iu\bar\psi(\cdots)\bigr)$.
+The second integral vanishes by the computation in Theorem~\ref{thm:mass}. The first is
+$2\gamma\Mass$. Hence $\dd\Mass/\dd t = 2\gamma\Mass$.
+\end{proof}
+
+\begin{remark}[The sign convention is pinned by a measured rate, not by prose]
+Writing $-\iu\gamma\psi$ on the right-hand side would give decay instead. The tests assert
+$\dd\ln\Mass/\dd t = 2\gamma$ as a \emph{rate} rather than trusting the derivation ---
+which is the correct level of paranoia for a sign that is this easy to invert.
+\end{remark}
+
+\begin{remark}[This dial makes Model B actively wrong]
+Under $\gamma\neq0$ the true mass is \emph{not} conserved, so Model B's hard projection is
+no longer merely unhelpful --- it enforces a false constraint. A located crossover here is
+direct evidence about \emph{when a hard invariant stops helping}, which is the
+generalisation the whole study is aiming at. A \emph{bounded} result (``no crossover
+within the swept range'') is equally publishable.
+\end{remark}
+
+\begin{proposition}[What is exactly, and what is only approximately, exact]
+\label{prop:gainexact}
+The gain factor $\eu^{\gamma\tau}$ is a \emph{real scalar} and therefore commutes with the
+linear Fourier multiplier $\Kop_\tau$. Consequently splitting the gain away from the
+kinetic step introduces \textbf{no additional splitting error}, and the dial does not
+contaminate $\epssplit$.
+
+It does not, however, commute with the nonlinear local step. Along the exact local
+sub-flow $\psi_t = \gamma\psi + \iu(\beta\rho-V)\psi$ one has $\rho(\tau) = \rho_0\eu^{2\gamma\tau}$,
+so the exact accumulated phase is
+\[
+\int_0^{\tau}\!\bigl(\beta\rho_0\eu^{2\gamma s} - V\bigr)\dd s
+= \beta\rho_0\,\tau\bigl(1+\gamma\tau\bigr) - V\tau + O(\gamma^2\tau^3),
+\]
+whereas freezing $\rho$ at $\rho_0$ gives $\beta\rho_0\tau - V\tau$. The local substep
+therefore carries a phase error $\beta\rho_0\gamma\tau^2 + O(\gamma^2\tau^3)$ --- second
+order in the substep and \emph{first order in the dial}, hence vanishing as $\gamma\to0$
+and further suppressed by a factor $1/M$ by the substepping.
+\end{proposition}
+
+The precise statement to make in the thesis is therefore: \emph{gain and kinetic commute
+exactly; the residual $O(\beta\gamma\dt^2/M)$ term lives inside the local substep and is
+suppressed by the substepped reference along with the ordinary Strang commutator.}
+
+\subsection{The dial-zero gate}
+
+\begin{trap}[A spectral Gaussian at $\sigma=0$ is not the identity]
+\label{trap:dialzero}
+$\widehat{W_0}\equiv 1$ exactly, but $\mathcal{F}^{-1}(\mathcal{F}\rho \cdot 1)$ is
+\textbf{not bitwise} $\rho$ --- the FFT round trip is accurate, not exact. Phase 9's
+opening gate asserts that the dial-zero generator reproduces the unperturbed solver
+\emph{bitwise}, so both perturbed operators short-circuit to the plain Strang forward pass
+at zero, and the exact arm is routed through the \emph{same class} the production shards
+were generated with. This is load-bearing, not an optimisation: a crossover measured
+against a subtly different zero point is uninterpretable.
+\end{trap}
+
+\begin{trap}[Turn one dial at a time]
+Two simultaneous perturbations cannot be attributed to either broken assumption. The
+configuration object refuses the combination outright.
+\end{trap}
+
+\begin{remark}[The perturbed generators must be substepped too]
+Both dials are wrapped in the same $M=32$ substepping as the unperturbed reference. A
+single perturbed Strang step at $\dt$ would confound the dial with the $O(\dt^2)$
+splitting error, and every located crossover would then be partly a measurement of
+$\epssplit$.
+\end{remark}
+
+\begin{remark}[Do not add other equations]
+NLS was chosen because it bundles nonlinearity, complex fields, spectral structure,
+Hamiltonian invariants, phase-sensitive error and long-horizon stability into one
+equation. Adding Burgers, wave or Navier--Stokes before Phase 9 is complete costs the
+thesis its spine.
+\end{remark}
+
+\sourcenote{src/spno/solvers/perturbed.py, src/spno/misspecification.py}
+\newpage
+\part*{Part V \quad Data, measurement, and the phase map}
+\addcontentsline{toc}{part}{Part V \; Data, measurement, phase map}
+
+\section{The training distribution, and why it is shaped this way}
+\label{sec:datadesign}
+
+Two design choices exist purely to keep later experiments honest.
+
+\begin{enumerate}[leftmargin=1.4em,itemsep=0.4em]
+\item \textbf{Sharp spectral cutoff.} Initial conditions are band-limited \emph{exactly}
+to $|k|\le\ktrain=8$:
+\[
+\widehat{\psi_0}(k) \;=\; \mathbf{1}_{|k|\le \ktrain}\;\eu^{-|k|^2/(2\ktrain^2)}\;\widehat{\xi}(k),
+\qquad \xi \text{ white noise},
+\]
+with real and imaginary parts drawn independently (the NLS state is a genuine complex
+field, not a pair of coupled real ones). A \emph{soft} filter that leaked high-$k$ energy
+into the training set would void the G4 bandwidth-shift design with no visible symptom.
+
+\item \textbf{Mass varies across samples} --- drawn uniformly in $[1,3]$, a $3\times$
+range. Normalising every initial condition to unit mass would make mass conservation
+\emph{memorisable}, which flatters the unconstrained baselines and turns Model B's
+projection into a no-op.
+\end{enumerate}
+
+Potentials are smooth, real, and normalised so that $\max|V|$ equals the sampled
+amplitude, with amplitude, correlation length and functional family controlled
+\emph{independently} so that the G3 potential arm can vary one at a time.
+
+\subsection{The resolution-adequacy screen}
+
+Focusing NLS ($\beta>0$) can steepen a field until the grid stops resolving it, and the
+resulting error looks exactly like an out-of-distribution failure. The screen measures the
+spectral tail fraction above $0.75\,\knyq$ and requires it to stay below $10^{-6}$;
+trajectories that fail are excluded, or the $(\alpha,\beta)$ box is narrowed.
+
+\begin{observation}[The production box is resolved with enormous margin]
+Maximum tail fraction over 64 screened samples: $2.52\times10^{-10}$, median
+$3.55\times10^{-13}$, against a threshold of $10^{-6}$. Zero samples over threshold.
+Verdict: \emph{resolved}.
+\end{observation}
+
+\section{Resolution transfer, honestly}
+\label{sec:resolution}
+
+\subsection{Spectral resampling}
+
+\begin{proposition}[Exact resampling of band-limited fields]
+\label{prop:resample}
+Moving a periodic field between grids by truncating or zero-padding its spectrum is
+\textbf{exact} for any field band-limited below both Nyquists. With the
+\code{norm="backward"} convention the inverse transform carries the $1/N$, so coefficients
+must be rescaled by $N_{\mathrm{tgt}}/N_{\mathrm{src}}$ to hold the \emph{physical}
+amplitude fixed rather than the discrete one.
+\end{proposition}
+
+\begin{proof}
+$\psi(x_j) = \tfrac{1}{N}\sum_k\widehat\psi_k\eu^{\iu kx_j}$. For the continuum function to
+be unchanged on the target grid one needs
+$\tfrac{1}{N'}\sum_k \widehat\psi'_k\eu^{\iu kx} = \tfrac{1}{N}\sum_k\widehat\psi_k\eu^{\iu kx}$
+for all $x$, hence $\widehat\psi'_k = (N'/N)\widehat\psi_k$ on the common modes and zero
+elsewhere. Exactness follows because a band-limited field has no coefficients outside that
+common set.
+\end{proof}
+
+\begin{trap}[The Nyquist mode is self-conjugate, and cannot be upsampled]
+\label{trap:nyquist}
+On an even grid the mode $k=N/2$ is self-conjugate: it represents $\cos(Nx/2)$ with no way
+to distinguish $+k$ from $-k$. Splitting it between the two target modes on a finer grid
+is a \textbf{choice, not a fact}, and silently making one would inject an arbitrary phase
+into every downstream number. Upsampling a field with relative energy above $10^{-12}$ at
+the source Nyquist is therefore refused rather than resolved by convention.
+\end{trap}
+
+\subsection{Which parameters are grid-independent}
+
+\begin{center}
+\begin{tabular}{@{}p{0.27\linewidth}p{0.66\linewidth}@{}}
+\toprule
+\textbf{parameter group} & \textbf{status}\\
+\midrule
+FNO \code{spectral.weight} & grid-independent \emph{for $|k|\le m$}: indexed by frequency,
+and \code{irfft} receives $n$ at call time. This is the \textbf{only} source of the FNO's
+resolution transfer, and it says nothing about modes above the budget.\\
+FNO lift / local / project & grid-independent: pointwise in the channel axis.\\
+C-family local phase & grid-independent: pointwise in $(\rho,V,\alpha,\beta)$, no
+grid-shaped parameter. (C2's phase FNO likewise indexes by frequency.)\\
+C-family \code{kinetic.k\_squared} & \emph{grid-dependent input range} --- see
+Proposition~\ref{prop:frozennorm}.\\
+Mass projection & grid-independent: rescaling by a mass ratio involves no grid-shaped
+parameter.\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{proposition}[The frozen normaliser, and its honest cost]
+\label{prop:frozennorm}
+The kinetic MLP consumes $\widetilde{k^2} = |k|^2/\max_{\mathrm{grid}}|k|^2$. On rebinding
+to a finer grid the normaliser is \textbf{frozen at the training grid's value}. Freezing is
+necessary: recomputing it would send the same \emph{physical} $k$ to a different network
+input ($1024$ at $N=64$, $4096$ at $N=128$), silently changing $\kappa$ everywhere without
+touching a weight. The cost, which must be reported rather than hidden, is that modes above
+the training grid's Nyquist then enter at $\widetilde{k^2}>1$ --- outside the input range
+the MLP ever saw.
+\end{proposition}
+
+\begin{remark}[The genuine resolution test is G4 wearing a different hat]
+Upsampling a \emph{band-limited} field and re-running an FNO barely changes its output,
+because the FNO only touches $|k|\le m$ and those modes are unchanged by the resample.
+\textbf{That is not evidence of resolution transfer.} The genuine test is new energy above
+the training grid's Nyquist --- which is spectral extrapolation (G4), not resolution
+transfer. The two arms are reported separately, with this sentence attached.
+\end{remark}
+
+\sourcenote{src/spno/evaluation/resolution.py}
+
+\section{Measurement: precision, drift classification, and order estimation}
+\label{sec:measurement}
+
+\subsection{Precision discipline}
+
+Training runs in \code{float32}/\code{complex64} for speed. \textbf{Anything measuring a
+conservation law is explicitly widened to \code{float64}/\code{complex128} and evaluated
+on CPU}, so that arithmetic roundoff never masks --- or manufactures --- a genuine
+architectural violation.
+
+\begin{observation}[The two floors, quoted beside every ``exact'' claim]
+\label{obs:floors}
+Mass drift of the reference over 100 steps:
+\[
+\text{\code{float64}, CPU}: 1.87\times10^{-14},
+\qquad
+\text{\code{float32}, CPU}: 1.43\times10^{-5}.
+\]
+The \code{float32} drift accumulates \textbf{linearly}, at $\approx1.2\times10^{-7}$ per
+split step --- not as a random walk. That is the signature of a systematic (biased)
+round-off in the FFT round trip rather than a stochastic one, and it means the drift is
+predictable from the step count. MPS is $\approx3\times$ worse than CPU.
+\end{observation}
+
+\begin{trap}[Floors must be measured with one split step per model step]
+The trajectory generator takes $M=32$ substeps per stored step. Measuring a
+\code{float32} mass floor with the generator's substepping would report $32\times$ the
+drift a model actually incurs. Use one split step per model step.
+\end{trap}
+
+\begin{trap}[Three ways to destroy a complex network while widening it]
+\label{trap:widen}
+(i) \code{.double()} on a complex tensor \textbf{silently drops the imaginary part}.
+(ii) \code{.double()} on a module \textbf{skips} complex parameters entirely.
+(iii) \code{.to(torch.float64)} \textbf{casts the complex spectral weights to real},
+destroying the operator with only a warning. All three are converted into hard exceptions
+by an explicit dtype guard inside the spectral convolution, and widening goes through a
+single dedicated helper.
+\end{trap}
+
+\begin{trap}[\texttt{model.to(device)} mutates in place]
+It will strand a core that another model shares --- and Model B-post deliberately reuses
+Model A's weights.
+\end{trap}
+
+\subsection{Bounded versus secular: classification by fitted slope}
+\label{sec:drift}
+
+``Bounded'' and ``secular'' differ by whether drift keeps \emph{growing with the horizon},
+which is a statement about a trend, so it is fitted rather than eyeballed:
+\[
+\log d_i \;\approx\; c + s\,\log n_i,
+\qquad
+\text{classification} = \begin{cases}\text{bounded} & s < 0.25\\ \text{secular} & s\ge 0.25\end{cases}
+\]
+with $s$ reported together with its standard error. A conserved-up-to-model-error quantity
+plateaus ($s\approx0$); linear accumulation gives $s\approx1$. The cut at $0.25$ is
+deliberately \textbf{generous to ``bounded''}, so that a borderline case is reported as
+secular rather than flattering the structured model. Points with $d_i\le0$ are dropped:
+they are exact conservation, which has no slope.
+
+\subsection{Order estimation}
+
+Every order claim in the project is a measured $\log_2$ ratio compared against the
+expected value, never a threshold:
+\[
+p_i = \log_2\frac{e_{i+1}}{e_i},
+\qquad
+\text{regime} = \begin{cases}
+\text{exact} & \max_i e_i < 10^{-12}\ \text{and flat in }\dt\\
+\text{approximate, order } \bar p & \max_i p_i - \min_i p_i < 0.25\\
+\text{inconsistent} & \text{otherwise}
+\end{cases}
+\]
+Varying $\dt$ away from the trained value is deliberate here: it probes the
+\emph{architecture}, and is not a claim about prediction accuracy at those step sizes.
+Because a trained model legitimately refuses off-$\dt$ evaluation
+(Remark~\ref{rem:fnodt}), the licence to do so is a scoped, temporary opt-in rather than a
+flag that stays flipped.
+
+\subsection{Run-identifier hygiene}
+
+Every swept knob enters the run identifier. A four-value $\lambda$ sweep writing to one
+directory silently overwrites three results. The pattern is
+\code{f"\{config\_hash(data\_config)\}-\{arm\}-\{knob\}"}, and the misspecification
+identifier deliberately \emph{collapses} to the bare data hash at dial zero so the exact
+arm reuses the existing shards untouched while every perturbed arm gets its own directory.
+
+Gates use \code{raise RuntimeError}, never \code{assert}: \code{python -O} strips asserts,
+and a gate is the only thing standing between an instrument bug and a full run of
+plausible-but-fictional numbers.
+
+\section{The phase map}
+\label{sec:phasemap}
+
+Which mathematics each phase of the pipeline rests on.
+
+\begin{center}
+\small
+\begin{longtable}{@{}p{0.055\linewidth}p{0.30\linewidth}p{0.58\linewidth}@{}}
+\toprule
+\textbf{Ph.} & \textbf{What it does} & \textbf{Mathematics it rests on}\\
+\midrule
+\endhead
+\textbf{0} & Reference validation & Lemmas~\ref{lem:kinetic}--\ref{lem:local} (exact
+sub-flows); Theorems~\ref{thm:strangmass}--\ref{thm:strangorder} (mass, reversibility,
+symplecticity, order 2); Corollary~\ref{cor:modham} (bounded energy);
+Definition~\ref{def:epssplit} and \S\ref{sec:fittedfloor} (the floor and the fitted floor);
+\S\ref{sec:datadesign} (resolution screen).\\[0.4em]
+
+\textbf{1} & Data generation & \S\ref{sec:datadesign} (sharp cutoff, varying mass, potential
+families); Remark~\ref{rem:tautology} (targets must be substepped);
+Observation~\ref{obs:cascade} (the cascade stays below $\kwrap$);
+Theorem~\ref{thm:alphaderiv} precondition ($\Delta\alpha\,k^2\dt<\pi$) checked on the
+realised draw.\\[0.4em]
+
+\textbf{2--3} & Baselines A and B & \S\ref{sec:fno} (FNO structure, grid independence,
+the three high-$k$ causes); Proposition~\ref{prop:metricproj} (projection is the metric
+projection); Guarantee~\ref{guar:B}; \S\ref{sec:drift} (secular vs bounded classification).\\[0.4em]
+
+\textbf{4--5} & Structured models C1/C2/C3 & Theorem~\ref{thm:learnedmain} (the four
+guarantees, with proofs); Corollary~\ref{cor:boundedenergy} (the falsifiable prediction);
+Guarantees~\ref{guar:c2}--\ref{guar:c3} and the C3 order-2 proof (\S\ref{sec:c3});
+Remark~\ref{rem:kam} (reversible-KAM caveat); \S\ref{sec:ladders} (the K/L ladders and
+Observation~\ref{obs:ladder}).\\[0.4em]
+
+\textbf{6} & Generalisation and identifiability \emph{(the spine)} &
+Definition~\ref{def:multiplier} and Proposition~\ref{prop:strangexactpw} (the probe, and
+why its floor is roundoff not $\epssplit$); \textbf{Theorem~\ref{thm:wrap}} (G5a: the
+negative theorem) with Corollary~\ref{cor:multistep} and
+Proposition~\ref{prop:alias}/Remark~\ref{rem:permode};
+\textbf{Theorem~\ref{thm:alphaderiv}} (G5b: the positive theorem);
+Proposition~\ref{prop:anchor} (why continuation is a \emph{different} claim);
+Corollary~\ref{cor:dyadic} (G6: what a dyadic $\dt$ ladder actually buys);
+\S\ref{sec:probeamp} (G-arms: probe amplitude and the mass confound);
+\S\ref{sec:spectraldiag} (G7 band ratio; G9 cascade).\\[0.4em]
+
+\textbf{7} & PINO baseline & Definition~\ref{def:cnresidual};
+\textbf{Theorem~\ref{thm:cayley}} and Corollary~\ref{cor:pinoconfound} (the physics loss
+contains the invariant under study); Corollary~\ref{cor:cnfreq} (the scheme's own
+frequency); Proposition~\ref{prop:residualexpansion} (second order, coefficients derived);
+loss normalisation.\\[0.4em]
+
+\textbf{8} & Resolution and robustness & Proposition~\ref{prop:resample} and
+Trap~\ref{trap:nyquist} (exact resampling; the Nyquist obstruction);
+Proposition~\ref{prop:frozennorm} (the frozen normaliser and its cost);
+Proposition~\ref{prop:fnogrid} (what grid independence does and does not mean);
+\S\ref{sec:measurement} (noise, sparsity, and the precision floors).\\[0.4em]
+
+\textbf{9} & Misspecification sweep & Definition~\ref{def:nonlocal},
+Proposition~\ref{prop:kernel}, \textbf{Theorem~\ref{thm:nonlocalham}} (nonlocal but still
+Hamiltonian --- what separates C1 from C2); Definition~\ref{def:gainloss} and
+\textbf{Theorem~\ref{thm:gainloss}} ($\dd\ln\Mass/\dd t = 2\gamma$);
+Proposition~\ref{prop:gainexact} (what is exactly vs approximately exact under the dial);
+Trap~\ref{trap:dialzero} (the bitwise gate).\\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\section{Constants and measured values}
+\label{sec:constants}
+
+All at configuration hash \code{bd4e108527}: $N=64$, $\dt=0.01$, $M=32$ substeps,
+$\alpha\sim U(0.7,1.1)$, $\beta\sim U(-0.4,0.6)$, $\psi_0$ band-limited to $|k|\le8$,
+mass $\sim U(1,3)$, $800/100/100$ disjoint trajectories $\times$ $200$ steps
+$=$ $160{,}000$ one-step training pairs.
+
+\begin{center}
+\begin{tabular}{@{}p{0.52\linewidth}r@{}}
+\toprule
+\textbf{quantity} & \textbf{value}\\
+\midrule
+$\epssplit$ (splitting floor, mean) & $6.239\times10^{-5}$\\
+\hspace{1em} median / min / max & $4.484\times10^{-5}$ / $1.155\times10^{-6}$ / $2.801\times10^{-4}$\\
+$\epssplit^{\mathrm{fit}}/\epssplit$, scalar family & $0.9999978$\\
+$\epssplit^{\mathrm{fit}}/\epssplit$, per-mode (\code{K2}) family & $0.99999$\\
+fitted kinetic / local scale & $1.0000008$ / $0.9999979$\\
+Strang convergence order (finest ratio) & $2.0465$\\
+reference self-convergence, $M{=}32$ vs $M{=}64$ & $1.50\times10^{-7}$ ($0.24\%$ of $\epssplit$)\\
+\midrule
+$\ktrain$ / $\kwrap$ / $\knyq$ & $8$ / $16.90$--$21.19$ / $32$\\
+$\alpha$ max gap (train) & $3.467\times10^{-3}$ \; (needs ${<}\,0.3068$)\\
+probe amplitude $A$ & $0.5642$\\
+\midrule
+mass floor, \code{float64} CPU (100 steps) & $1.87\times10^{-14}$\\
+mass floor, \code{float32} CPU (100 steps) & $1.43\times10^{-5}$\\
+\code{float32} drift per split step & $\approx1.2\times10^{-7}$, \emph{linear}\\
+long run: max mass drift, \code{float64} (1000 steps) & $3.82\times10^{-13}$\\
+long run: max energy drift; classification & $7.92\times10^{-5}$; \emph{bounded}\\
+resolution screen: max tail fraction & $2.52\times10^{-10}$ (threshold $10^{-6}$)\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection*{Phases 2--3 (3 seeds, 25 epochs, $287{,}746$ params each)}
+
+\begin{center}
+\begin{tabular}{@{}lrrrrl@{}}
+\toprule
+\textbf{model} & \textbf{1-step} & \textbf{roll@100} & \textbf{mass@100} & \textbf{energy@100} & \textbf{trend}\\
+\midrule
+A \; (FNO) & $6.94\times10^{-4}$ & $2.77\times10^{-2}$ & $1.61\times10^{-2}$ & $1.79\times10^{-2}$ & secular\\
+B-post & $6.74\times10^{-4}$ & $2.57\times10^{-2}$ & $1.3\times10^{-15}$ & $9.19\times10^{-3}$ & secular\\
+B-loop & $6.62\times10^{-4}$ & $2.44\times10^{-2}$ & $1.2\times10^{-15}$ & $8.14\times10^{-3}$ & secular\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The FNO does \textbf{not} beat $\epssplit$; it sits $11\times$ above it, so the structured
+models have headroom.
+
+\subsection*{Phases 4--5 (guarantees verified at \emph{random untrained} weights)}
+
+\begin{center}
+\begin{tabular}{@{}lrrrl@{}}
+\toprule
+\textbf{model} & \textbf{params} & \textbf{vs A} & \textbf{mass @init} & \textbf{reversibility}\\
+\midrule
+C1 (pointwise $\rho$ phase) & $2{,}466$ & $0.009\times$ & $4.4\times10^{-16}$ & exact ($\dt$-independent)\\
+C2 (FNO-on-$\rho$ phase) & $288{,}770$ & $1.004\times$ & $2.2\times10^{-16}$ & exact\\
+C3 (Re/Im $\psi$ phase) & $288{,}834$ & $1.004\times$ & $4.4\times10^{-16}$ & \textbf{order 2.00}\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{center}
+\emph{A vs C2 is the fair fight: same backbone, matched capacity, differing only in whether
+the network output is the field or a phase applied to it.}
+\end{center}
+
+\vspace{1.5em}
+\hrule
+\vspace{0.8em}
+
+\subsection*{A note on outstanding debt}
+
+Phases 2--3 as tabulated were \textbf{budget-bound}: \code{best\_epoch == 24} for all six
+runs (early stopping never fired) with validation loss still falling $26$--$50\%$ over the
+last five epochs. The numbers above are therefore a lower bound on all three models'
+achievable accuracy and are not yet convergence-comparable. Nothing in this document's
+\emph{mathematics} depends on them; the guarantees are architectural and hold at random
+initialisation. But no accuracy number should enter the thesis until the budget-bound
+warning is empty for every model in the comparison.
+
+\end{document}

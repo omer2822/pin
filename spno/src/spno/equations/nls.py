@@ -48,14 +48,17 @@ def nls_hamiltonian(
         raise ValueError("field and potential must have shape (batch, *domain.shape)")
     alpha_grid = batch_parameter(alpha, field.shape[0], domain, field, "alpha")
     beta_grid = batch_parameter(beta, field.shape[0], domain, field, "beta")
+
     spatial_gradient = spectral_gradient(field, domain)
     kinetic_density = torch.sum(torch.abs(spatial_gradient) ** 2, dim=1)
     density = torch.abs(field) ** 2
+
     energy_density = (
         alpha_grid * kinetic_density
         + potential * density
         - 0.5 * beta_grid * density**2
     )
+
     return torch.sum(energy_density, dim=domain.spatial_axes) * domain.cell_volume
 
 
@@ -117,7 +120,7 @@ def plane_wave_mass(domain: PeriodicDomain, amplitude: float) -> float:
     mass distribution, or it confounds spectral extrapolation with mass extrapolation.
     """
 
-    return amplitude**2 * math.prod(domain.lengths)
+    return amplitude**2 * domain.volume
 
 
 def wrap_wavenumber(alpha: float, dt: float) -> float:

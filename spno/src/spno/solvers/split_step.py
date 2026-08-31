@@ -143,6 +143,7 @@ def split_step_solver(
     operator_dispersion = np.exp(-1j * (k**2) * (dt / 2))
 
     for _ in range(steps):
+        # fft the field 
         psi_freq = np.fft.fft(psi)
         psi = np.fft.ifft(psi_freq * operator_dispersion)
 
