@@ -28,6 +28,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import math
+from collections.abc import Mapping
+from numbers import Real
+from pathlib import Path
 
 import matplotlib
 
@@ -35,9 +40,22 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import torch
 
+from spno.checkpoints import CheckpointMetadata, checkpoint_path, save_checkpoint
 from spno.config import DataConfig, config_hash
+from spno.data.datasets import (
+    SPLIT_SEED_OFFSET,
+    TrajectoryShard,
+    assert_no_leakage,
+    generate_shard,
+    shard_paths,
+)
+from spno.evaluation.payloads import require_phase_arms
 from spno.experiments import (
+    DATA_ROOT,
+    RESULTS_ROOT,
+    converged,
     describe_config,
+    evaluate_model,
     pick_device,
     run_identifier,
     save_run,
@@ -55,13 +73,12 @@ from spno.solvers.perturbed import (
     NonlocalSplitStepNLSOperator,
 )
 from spno.solvers.split_step import SplitStepNLSOperator, SubsteppedReference
-from spno.train import TrainConfig
+from spno.seeding import seed_everything
+from spno.train import TrainConfig, field_scale, train_one_step
 
-import dataclasses
-from pathlib import Path
-from spno.experiments import load_shards, evaluate_model, DATA_ROOT
-from spno.train import train_one_step
-from spno.data.datasets import generate_shard, shard_paths, assert_no_leakage
+
+MODEL_NAMES = ("A", "B-loop", "C1", "C2", "C3")
+COMPARISON_MODELS = MODEL_NAMES[1:]
 
 
 def bitwise_gate(data_config: DataConfig) -> dict:
@@ -119,29 +136,313 @@ def bitwise_gate(data_config: DataConfig) -> dict:
     return {"bitwise_at_zero": True, "identifier_collapses": True}
 
 
-def build_models(domain, data_config: DataConfig) -> dict:
-    """All five models are retrained at every dial value."""
+def build_models(data_config: DataConfig, scale: float, seed: int) -> dict:
+    """Construct all five arms from the requested paired seed and normalization."""
 
-    common = dict(
-        alpha_range=data_config.alpha_range,
-        beta_range=data_config.beta_range,
-        trained_dt=data_config.dt,
-    )
-    dt = data_config.dt
+    domain = data_config.domain
+    common = {
+        "modes": 16,
+        "width": 64,
+        "n_layers": 4,
+        "alpha_range": data_config.alpha_range,
+        "beta_range": data_config.beta_range,
+        "field_scale": scale,
+        "trained_dt": data_config.dt,
+    }
+
+    def seeded(build):
+        seed_everything(seed)
+        return build()
+
     return {
-        "A": lambda: FNOStepOperator(domain, modes=16, **common),
-        "B-loop": lambda: MassProjectedOperator(
-            FNOStepOperator(domain, modes=16, **common)
+        "A": seeded(lambda: FNOStepOperator(domain, **common)),
+        "B-loop": seeded(
+            lambda: MassProjectedOperator(FNOStepOperator(domain, **common))
         ),
-        "C1": lambda: DensityPhaseSplitStep(domain, kinetic_mode="K0", trained_dt=dt),
-        "C2": lambda: FieldDensityPhaseSplitStep(
-            domain, kinetic_mode="K0", trained_dt=dt
+        "C1": seeded(
+            lambda: DensityPhaseSplitStep(
+                domain, kinetic_mode="K0", trained_dt=data_config.dt
+            )
         ),
-        "C3": lambda: FullFieldPhaseSplitStep(domain, trained_dt=dt),
+        "C2": seeded(
+            lambda: FieldDensityPhaseSplitStep(
+                domain, kinetic_mode="K0", trained_dt=data_config.dt
+            )
+        ),
+        "C3": seeded(
+            lambda: FullFieldPhaseSplitStep(domain, trained_dt=data_config.dt)
+        ),
     }
 
 
-def locate_crossover(by_dial: dict, model: str) -> dict:
+def model_architecture(
+    name: str,
+    *,
+    misspecification_identifier: str,
+    dial: str,
+    value: float,
+) -> dict:
+    """Checkpoint architecture and Phase 9 provenance for one trained arm."""
+
+    shared = {
+        "misspecification_identifier": misspecification_identifier,
+        "dial": dial,
+        "dial_value": value,
+    }
+    if name in ("A", "B-loop"):
+        architecture = {
+            "modes": 16,
+            "width": 64,
+            "n_layers": 4,
+            "use_coordinate_channel": False,
+        }
+        if name == "B-loop":
+            architecture["projection"] = "mass"
+    elif name == "C1":
+        architecture = {"kinetic_mode": "K0", "local_mode": "L0", "width": 32}
+    else:
+        architecture = {
+            "kinetic_mode": "K0",
+            "local_mode": None if name == "C3" else "L0",
+            "modes": 16,
+            "width": 64,
+            "n_layers": 4,
+        }
+    return {**architecture, **shared}
+
+
+def _positive_finite(value: object) -> bool:
+    return (
+        isinstance(value, Real)
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+        and float(value) > 0.0
+    )
+
+
+def ensure_complete_ratios(by_model: Mapping[str, Mapping[str, object]]) -> dict[str, float]:
+    """Compute A-relative ratios only from complete positive finite measurements."""
+
+    missing = [name for name in MODEL_NAMES if name not in by_model]
+    if missing:
+        raise RuntimeError(
+            f"Phase 9 needs complete positive finite model errors; missing {missing}"
+        )
+    means = {
+        name: by_model[name].get("rollout_error_mean") for name in MODEL_NAMES
+    }
+    invalid = [name for name, value in means.items() if not _positive_finite(value)]
+    if invalid:
+        raise RuntimeError(
+            "Phase 9 needs complete positive finite model errors; invalid "
+            f"measurements for {invalid}"
+        )
+    denominator = float(means["A"])
+    return {
+        name: float(means[name]) / denominator for name in COMPARISON_MODELS
+    }
+
+
+def aggregate_seed_measurements(
+    per_seed: Mapping[int, Mapping[str, Mapping[str, object]]],
+    *,
+    selected_horizon: int,
+) -> dict:
+    """Aggregate one dial arm while preserving every observation behind its ratios."""
+
+    if not per_seed:
+        raise RuntimeError("Phase 9 needs at least one seed measurement")
+
+    by_model: dict[str, dict] = {}
+    for name in MODEL_NAMES:
+        observations = []
+        for seed in sorted(per_seed):
+            try:
+                result = per_seed[seed][name]
+                metrics = result["metrics"]
+                rollout = metrics["rollout"]
+                horizon_index = rollout["steps"].index(selected_horizon)
+                rollout_error = rollout["relative_error"][horizon_index]
+                one_step_error = metrics["one_step_test"]
+            except (KeyError, TypeError, ValueError, IndexError) as exc:
+                raise RuntimeError(
+                    f"Phase 9 seed {seed} model {name} lacks a measurement at "
+                    f"horizon {selected_horizon}"
+                ) from exc
+            if not _positive_finite(rollout_error):
+                raise RuntimeError(
+                    f"Phase 9 seed {seed} model {name} needs a positive finite "
+                    "rollout error"
+                )
+            if (
+                not isinstance(one_step_error, Real)
+                or isinstance(one_step_error, bool)
+                or not math.isfinite(float(one_step_error))
+                or float(one_step_error) < 0.0
+            ):
+                raise RuntimeError(
+                    f"Phase 9 seed {seed} model {name} needs a finite nonnegative "
+                    "one-step error"
+                )
+            observations.append(
+                {
+                    "seed": seed,
+                    "one_step_test": float(one_step_error),
+                    "rollout_error": float(rollout_error),
+                    "converged": bool(result["converged"]),
+                    **(
+                        {"history": result["history"]}
+                        if "history" in result
+                        else {}
+                    ),
+                    **(
+                        {"checkpoint": str(result["checkpoint"])}
+                        if "checkpoint" in result
+                        else {}
+                    ),
+                }
+            )
+
+        rollout_errors = [entry["rollout_error"] for entry in observations]
+        one_step_errors = [entry["one_step_test"] for entry in observations]
+        parameters = int(per_seed[next(iter(sorted(per_seed)))][name]["metrics"]["parameters"])
+        by_model[name] = {
+            "parameters": parameters,
+            "one_step_mean": sum(one_step_errors) / len(one_step_errors),
+            "one_step_min": min(one_step_errors),
+            "one_step_max": max(one_step_errors),
+            "rollout_error_mean": sum(rollout_errors) / len(rollout_errors),
+            "rollout_error_min": min(rollout_errors),
+            "rollout_error_max": max(rollout_errors),
+            "converged": [entry["converged"] for entry in observations],
+            "per_seed": observations,
+        }
+
+    return {
+        "selected_horizon": selected_horizon,
+        "by_model": by_model,
+        "relative_to_A": ensure_complete_ratios(by_model),
+    }
+
+
+def quick_data_config() -> DataConfig:
+    """The documented smoke-test distribution; generated in memory only."""
+
+    return DataConfig(
+        grid_size=16,
+        n_train=2,
+        n_val=1,
+        n_test=2,
+        steps=2,
+    )
+
+
+def validate_shards(
+    shards: Mapping[str, TrajectoryShard],
+    data_config: DataConfig,
+    spec: MisspecificationConfig,
+) -> None:
+    """Fail closed when a loaded shard set does not match its requested arm."""
+
+    if set(shards) != {"train", "val", "test"}:
+        raise RuntimeError("Phase 9 needs complete train/val/test shard sets")
+    expected_counts = {
+        "train": data_config.n_train,
+        "val": data_config.n_val,
+        "test": data_config.n_test,
+    }
+    expected_reference = spec.provenance(data_config)
+    for split, shard in shards.items():
+        failures = []
+        if shard.split != split:
+            failures.append(f"split={shard.split!r}")
+        if shard.n_trajectories != expected_counts[split]:
+            failures.append(f"n_trajectories={shard.n_trajectories}")
+        if shard.n_frames != data_config.steps + 1:
+            failures.append(f"n_frames={shard.n_frames}")
+        if tuple(shard.trajectories.shape[2:]) != data_config.domain.shape:
+            failures.append(f"grid={tuple(shard.trajectories.shape[2:])}")
+        if shard.dt != data_config.dt:
+            failures.append(f"dt={shard.dt}")
+        metadata_expectations = {
+            "grid_size": data_config.grid_size,
+            "substeps": data_config.substeps,
+            "steps": data_config.steps,
+            "seed": data_config.seed + SPLIT_SEED_OFFSET[split],
+        }
+        for key, expected in metadata_expectations.items():
+            if shard.metadata.get(key) != expected:
+                failures.append(f"metadata.{key}={shard.metadata.get(key)!r}")
+        if not spec.is_exact and shard.metadata.get("reference") != expected_reference:
+            failures.append("metadata.reference does not match requested provenance")
+        if failures:
+            raise RuntimeError(
+                f"Phase 9 shard {split} does not match {spec.identifier(data_config)}: "
+                + ", ".join(failures)
+            )
+    assert_no_leakage(dict(shards))
+
+
+def prepare_shards(
+    data_config: DataConfig,
+    spec: MisspecificationConfig,
+    *,
+    quick: bool,
+    data_root: Path = DATA_ROOT,
+) -> dict[str, TrajectoryShard]:
+    """Generate quick arms in memory or safely load/create production arms."""
+
+    dataset_id = spec.identifier(data_config)
+    reference = spec.reference(data_config)
+    reference_metadata = None if spec.is_exact else spec.provenance(data_config)
+    if quick:
+        shards = {
+            split: generate_shard(
+                data_config,
+                split,
+                reference=reference,
+                reference_metadata=reference_metadata,
+            )
+            for split in ("train", "val", "test")
+        }
+        validate_shards(shards, data_config, spec)
+        return shards
+
+    paths = shard_paths(data_root, dataset_id)
+    existing = {split: path.exists() for split, path in paths.items()}
+    if spec.is_exact:
+        missing = [str(paths[split]) for split, present in existing.items() if not present]
+        if missing:
+            raise FileNotFoundError(
+                "production shards are required for the exact Phase 9 arm; run "
+                "scripts/run_phase1.py first. Missing: " + ", ".join(missing)
+            )
+    elif any(existing.values()) and not all(existing.values()):
+        raise RuntimeError(
+            f"refusing to overwrite incomplete Phase 9 shard set {dataset_id}: "
+            f"present={[split for split, present in existing.items() if present]}"
+        )
+    elif not any(existing.values()):
+        generated = {}
+        for split, path in paths.items():
+            print(f"generating {split} for {dataset_id} ...")
+            shard = generate_shard(
+                data_config,
+                split,
+                reference=reference,
+                reference_metadata=reference_metadata,
+            )
+            shard.save(path)
+            generated[split] = shard
+        validate_shards(generated, data_config, spec)
+        return generated
+
+    loaded = {split: TrajectoryShard.load(path) for split, path in paths.items()}
+    validate_shards(loaded, data_config, spec)
+    return loaded
+
+
+def locate_crossover(by_dial: Mapping[str, Mapping[str, object]], model: str) -> dict:
     """Where a model's A-relative rollout error first reaches 1.0, or a bounded note.
 
     A located crossover is the result; a bounded one ("no crossover within the swept
@@ -149,15 +450,28 @@ def locate_crossover(by_dial: dict, model: str) -> dict:
     leaving the key absent, so a reader cannot mistake "not found" for "not looked for".
     """
 
-    dials = sorted(float(key) for key in by_dial)
-    ratios = [by_dial[str(d)].get("relative_to_A", {}).get(model) for d in dials]
-    
-    if not ratios or any(r is None for r in ratios):
-        raise ValueError(f"Missing evaluation data for {model}; cannot draw conclusions about crossover.")
+    if not by_dial:
+        raise RuntimeError(
+            f"Phase 9 {model} needs complete finite A-relative ratios"
+        )
+    try:
+        ordered = sorted(
+            (float(dial), measurement["relative_to_A"][model])
+            for dial, measurement in by_dial.items()
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"Phase 9 {model} needs complete finite A-relative ratios"
+        ) from exc
+    if any(not _positive_finite(ratio) for _, ratio in ordered):
+        raise RuntimeError(
+            f"Phase 9 {model} needs complete finite A-relative ratios"
+        )
 
-    for dial, ratio in zip(dials, ratios):
+    for dial, ratio in ordered:
         if ratio >= 1.0:
             return {"crossover": dial, "bounded": None}
+    dials = [dial for dial, _ in ordered]
     return {
         "crossover": None,
         "bounded": f"no crossover within [{min(dials, default=0)}, "
@@ -168,7 +482,7 @@ def locate_crossover(by_dial: dict, model: str) -> dict:
 def make_plots(payload: dict, output) -> None:
     figure, axes = plt.subplots(1, 2, figsize=(12, 4.5))
     for axis, dial in zip(axes, ("sigma", "gamma")):
-        by_dial = payload["sweeps"].get(dial, {})
+        by_dial = payload["sweeps"].get(dial, {}).get("measurements", {})
         if by_dial:
             values = sorted(float(key) for key in by_dial)
             models = sorted(
@@ -182,7 +496,7 @@ def make_plots(payload: dict, output) -> None:
                 axis.plot(
                     values,
                     [
-                        by_dial[str(v)]["relative_to_A"].get(model, float("nan"))
+                        by_dial[str(v)]["relative_to_A"][model]
                         for v in values
                     ],
                     marker="o",
@@ -216,139 +530,221 @@ def parse_args(argv=None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv=None) -> dict:
-    args = parse_args(argv)
-    data_config = DataConfig()
+def run_dial_measurement(
+    data_config: DataConfig,
+    spec: MisspecificationConfig,
+    *,
+    dial: str,
+    value: float,
+    seeds: tuple[int, ...],
+    train_config: TrainConfig,
+    quick: bool,
+    run_id: str,
+    data_root: Path = DATA_ROOT,
+    checkpoint_root: Path = RESULTS_ROOT,
+) -> dict:
+    """Train and evaluate one complete Phase 9 dial value."""
+
+    dataset_id = spec.identifier(data_config)
+    shards = prepare_shards(
+        data_config, spec, quick=quick, data_root=data_root
+    )
+    scale = field_scale(shards["train"], data_config.domain)
+    selected_horizon = min(
+        100, *(shard.n_frames - 1 for shard in shards.values())
+    )
+    checkpoint_identifier = run_identifier(run_id, dial, f"{value:g}")
+    per_seed: dict[int, dict[str, dict]] = {}
+
+    print(f"\n--- {dial}={value} ({dataset_id}) ---")
+    for seed in seeds:
+        config_for_seed = dataclasses.replace(train_config, seed=seed)
+        models = build_models(data_config, scale, seed)
+        per_seed[seed] = {}
+        for name, model in models.items():
+            print(f"  training {name} (seed {seed})...")
+            history = train_one_step(
+                model,
+                shards["train"],
+                shards["val"],
+                data_config,
+                config_for_seed,
+                verbose=not quick,
+            )
+            metrics = evaluate_model(
+                model,
+                shards,
+                data_config,
+                config_for_seed,
+                checkpoints=(selected_horizon,),
+                n_rollout=min(100, shards["test"].n_trajectories),
+            )
+            did_converge = converged(history)
+            path = checkpoint_path(
+                checkpoint_root,
+                "phase9",
+                checkpoint_identifier,
+                name,
+                seed,
+            )
+            save_checkpoint(
+                path,
+                model,
+                CheckpointMetadata(
+                    schema_version=1,
+                    model_name=name,
+                    data_hash=dataset_id,
+                    seed=seed,
+                    train_mode="one-step",
+                    field_scale=scale,
+                    trained_dt=data_config.dt,
+                    architecture=model_architecture(
+                        name,
+                        misspecification_identifier=dataset_id,
+                        dial=dial,
+                        value=value,
+                    ),
+                    converged=False if quick else did_converge,
+                    best_epoch=history.best_epoch,
+                ),
+            )
+            per_seed[seed][name] = {
+                "metrics": metrics,
+                "history": history.as_dict(),
+                "converged": did_converge,
+                "checkpoint": path,
+            }
+
+    aggregated = aggregate_seed_measurements(
+        per_seed, selected_horizon=selected_horizon
+    )
+    return {
+        "value": value,
+        "identifier": dataset_id,
+        "reuses_production_shards": spec.is_exact and not quick,
+        "config": spec.as_dict(),
+        "reference": spec.provenance(data_config),
+        "field_scale": scale,
+        "seeds": list(seeds),
+        "note": "all five models retrained on this shard set; ratios use the "
+        "selected-horizon rollout error relative to Model A",
+        **aggregated,
+    }
+
+
+def run_sweep(
+    data_config: DataConfig,
+    args: argparse.Namespace,
+    *,
+    data_root: Path = DATA_ROOT,
+    checkpoint_root: Path = RESULTS_ROOT,
+    save=save_run,
+) -> dict:
+    """Execute both measured dial sweeps with injectable artifact boundaries."""
+
+    if args.epochs < 1:
+        raise ValueError("epochs must be positive")
+    if not args.seeds:
+        raise ValueError("at least one seed is required")
+
     device = pick_device(args.device)
-    epochs = 2 if args.quick else args.epochs
-    seeds = args.seeds[:1] if args.quick else args.seeds
-    identifier = run_identifier(config_hash(data_config), "misspec", quick=args.quick)
-
-    gates = bitwise_gate(data_config)
-    domain = data_config.domain
-    builders = build_models(domain, data_config)
-
+    epochs = 1 if args.quick else args.epochs
+    seeds = tuple(args.seeds[:1] if args.quick else args.seeds)
+    run_id = run_identifier(
+        config_hash(data_config), "misspec", quick=args.quick
+    )
+    train_config = TrainConfig(
+        epochs=epochs,
+        batch_size=256,
+        learning_rate=1e-3,
+        patience=6,
+        device=device,
+        max_train_pairs=256 if args.quick else None,
+    )
+    parameter_models = build_models(data_config, scale=1.0, seed=0)
     payload: dict = {
         "phase": 9,
         "data_hash": config_hash(data_config),
-        "identifier": identifier,
+        "identifier": run_id,
         "device": device,
         "quick": args.quick,
-        "gates": gates,
-        "parameter_counts": {name: build().parameter_count() for name, build in builders.items()},
-        "dials": {
-            "sigma": "nonlocal nonlinearity: breaks LOCALITY only. Still Hamiltonian, "
-            "still U(1), still exactly mass-conserving, so B's projection stays correct "
-            "and only C1's pointwise nu cannot represent the truth. Separates C1 from C2.",
-            "gamma": "weak gain/loss: breaks CONSERVATION itself, so B's hard mass "
-            "constraint becomes actively wrong.",
-            "excluded": "saturable and quintic nonlinearities are NOT used: nu_theta is "
-            "already a free function of rho and learns them easily, so they are not "
-            "misspecifications at all.",
+        "gates": bitwise_gate(data_config),
+        "parameter_counts": {
+            name: model.parameter_count() for name, model in parameter_models.items()
         },
-        "config": describe_config(
-            data_config, TrainConfig(epochs=epochs, device=device)
-        ),
-        "sweeps": {"sigma": {}, "gamma": {}},
+        "dials": {
+            "sigma": "nonlocal nonlinearity: breaks locality but preserves mass",
+            "gamma": "weak gain/loss: breaks conservation itself",
+            "excluded": "saturable and quintic terms remain representable by C1",
+        },
+        "config": describe_config(data_config, train_config),
+        "sweeps": {
+            "sigma": {"measurements": {}},
+            "gamma": {"measurements": {}},
+        },
         "crossover": {},
     }
 
     for dial, values in (("sigma", args.sigmas), ("gamma", args.gammas)):
-        for value in values:
+        measurements = payload["sweeps"][dial]["measurements"]
+        for raw_value in values:
+            value = float(raw_value)
             spec = (
                 MisspecificationConfig(nonlocal_sigma=value)
                 if dial == "sigma"
                 else MisspecificationConfig(gain_loss_gamma=value)
             )
-            identifier = spec.identifier(data_config)
-            
-            # Load or generate shards
-            try:
-                shards = load_shards(data_config, identifier=identifier)
-            except FileNotFoundError:
-                paths = shard_paths(DATA_ROOT, identifier)
-                paths["train"].parent.mkdir(parents=True, exist_ok=True)
-                shards = {}
-                reference = spec.reference(data_config)
-                for split in ("train", "val", "test"):
-                    print(f"generating {split} for {identifier} ...")
-                    shard = generate_shard(
-                        data_config,
-                        split,
-                        reference=reference,
-                        reference_metadata=spec.provenance(data_config)
-                    )
-                    shard.save(paths[split])
-                    shards[split] = shard
-                assert_no_leakage(shards)
-                
-            # Train models and collect errors
-            print(f"\n--- {dial}={value} ({identifier}) ---")
-            train_config = TrainConfig(
-                epochs=epochs,
-                batch_size=256,
-                learning_rate=1e-3,
-                patience=6,
-                device=device,
+            measurements[str(value)] = run_dial_measurement(
+                data_config,
+                spec,
+                dial=dial,
+                value=value,
+                seeds=seeds,
+                train_config=train_config,
+                quick=args.quick,
+                run_id=run_id,
+                data_root=data_root,
+                checkpoint_root=checkpoint_root,
             )
-            
-            # We track the rollout error at step 100 for each model and seed
-            errors = {name: [] for name in builders.keys()}
-            
-            for seed in seeds:
-                config_for_seed = dataclasses.replace(train_config, seed=seed)
-                for name, build_fn in builders.items():
-                    print(f"  training {name} (seed {seed})...")
-                    model = build_fn()
-                    # Re-seed exactly like the models do to ensure consistency
-                    torch.manual_seed(seed) 
-                    train_one_step(model, shards["train"], shards["val"], data_config, config_for_seed)
-                    evaluated = evaluate_model(model, shards, data_config, config_for_seed, checkpoints=(100,))
-                    # Index 0 corresponds to checkpoint 100 since it's the only one
-                    rollout_error = evaluated["rollout"]["relative_error"][0]
-                    errors[name].append(rollout_error)
-            
-            avg_errors = {name: sum(errs)/len(errs) for name, errs in errors.items()}
-            relative_to_A = {
-                name: avg_errors[name] / avg_errors["A"] 
-                for name in builders.keys() if name != "A"
-            }
-            
-            payload["sweeps"][dial][str(value)] = {
-                "value": value,
-                "identifier": identifier,
-                "reuses_production_shards": spec.is_exact,
-                "config": spec.as_dict(),
-                "seeds": seeds,
-                "note": "retrain all five models on this shard set, evaluate, and "
-                "record rollout error relative to A under 'relative_to_A'",
-                "relative_to_A": relative_to_A,
-            }
 
+    require_phase_arms(9, ("sigma", "gamma"), payload["sweeps"])
     for dial in ("sigma", "gamma"):
+        measurements = payload["sweeps"][dial]["measurements"]
         payload["crossover"][dial] = {
-            model: locate_crossover(payload["sweeps"][dial], model)
-            for model in ("B-loop", "C1", "C2", "C3")
+            model: locate_crossover(measurements, model)
+            for model in COMPARISON_MODELS
         }
+    require_phase_arms(9, ("sigma", "gamma"), payload["sweeps"])
 
-    output = save_run("phase9", identifier, payload)
+    output = save("phase9", run_id, payload)
     make_plots(payload, output)
 
     print(f"{'phase':<22}9 -- misspecification sweep")
     print(f"{'data hash':<22}{payload['data_hash']}")
-    print(f"{'identifier':<22}{identifier}")
+    print(f"{'identifier':<22}{run_id}")
     print(f"{'device':<22}{device}")
     print(f"{'bitwise gate':<22}passed at dial zero")
     print(f"{'sigmas':<22}{' '.join(str(v) for v in args.sigmas)}")
     print(f"{'gammas':<22}{' '.join(str(v) for v in args.gammas)}")
+    print(f"{'seeds':<22}{' '.join(str(seed) for seed in seeds)}  epochs {epochs}")
     for name, count in payload["parameter_counts"].items():
         print(f"{'  params ' + name:<22}{count:,}")
     for dial in ("sigma", "gamma"):
         for model, entry in payload["crossover"][dial].items():
-            state = entry["crossover"] if entry["crossover"] is not None else "bounded"
+            state = (
+                entry["crossover"]
+                if entry["crossover"] is not None
+                else "bounded"
+            )
             print(f"{'  crossover ' + dial + ' ' + model:<22}{state}")
     print(f"{'written to':<22}{output}")
     return payload
+
+
+def main(argv=None) -> dict:
+    args = parse_args(argv)
+    data_config = quick_data_config() if args.quick else DataConfig()
+    return run_sweep(data_config, args)
 
 
 if __name__ == "__main__":

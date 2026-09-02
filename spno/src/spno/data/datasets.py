@@ -178,7 +178,9 @@ def generate_shard(
         "mass_ratio": float(masses.max() / masses.min()),
         "alpha_min": float(alpha.min()),
         "alpha_max": float(alpha.max()),
-        "alpha_max_gap": float(torch.diff(alpha.sort().values).max()),
+        "alpha_max_gap": (
+            float(torch.diff(alpha.sort().values).max()) if n > 1 else 0.0
+        ),
         "beta_min": float(beta.min()),
         "beta_max": float(beta.max()),
         "k_wrap": k_wrap,

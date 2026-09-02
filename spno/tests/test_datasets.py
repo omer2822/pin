@@ -397,3 +397,12 @@ def test_a_negative_noise_level_is_refused():
     field = sample_initial_conditions(domain, 2, 8, (1.0, 3.0), generator)
     with pytest.raises(ValueError, match="non-negative"):
         add_field_noise(field, domain, level=-0.1, generator=generator)
+
+
+def test_singleton_shard_records_a_zero_parameter_gap():
+    singleton = dataclasses.replace(SMALL, n_val=1)
+
+    shard = generate_shard(singleton, "val")
+
+    assert shard.n_trajectories == 1
+    assert shard.metadata["alpha_max_gap"] == 0.0

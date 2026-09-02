@@ -61,21 +61,31 @@ python scripts/train_phase6_arms.py --epochs 80 --seeds 0 1 2  # train Phase 6 a
 python scripts/run_phase6.py --device auto                # checkpoint-only probes
 ```
 
-Common flags: `--quick`, `--seeds`, `--epochs`, `--device auto`. Phases 6-9 evaluate
-checkpoints produced by Phases 2-5 rather than training anything themselves, so they only
-make sense once those checkpoints exist and have actually converged (check `best_epoch`
-against the epoch budget — see `docs/PROMPT_PHASES_6_TO_9.md`).
+Common flags: `--quick`, `--seeds`, `--epochs`, `--device auto`. Phase 6 evaluates
+checkpoints produced by Phases 2-5, while Phases 7-9 run their own controlled training or
+retraining arms. Base checkpoints must therefore be converged before Phase 6, and every
+newly trained arm must likewise be checked for budget-bound histories (`best_epoch` at the
+epoch cap) before its numbers are reported.
 
 Phase 6 has one additional dependency: run `train_phase6_arms.py` after the Phase 2-3
 and matching Phase 4-5 one-step/K0L0 jobs. It trains `A-wide`, the fixed-alpha G7
 ablation, and the multi-dt G6a arm. The evaluator restores every learned model strictly
 from these checkpoint families; it never substitutes freshly initialized weights.
 
-Quick runs preserve the production grid but use two trajectories and two steps for
-Phase 6-only shards. Their datasets live under `results/phase6-quick-artifacts/`, their
+Phase 6 quick runs preserve the production grid but use two trajectories and two steps
+for Phase 6-only shards. Their datasets live under `results/phase6-quick-artifacts/`, their
 checkpoints are tagged `-quick`, and their metadata remains `converged=false`. They are
 plumbing checks only: the explicit `--quick` evaluator override may restore them, but
 they are never reportable scientific results.
+
+Phase 9 quick runs use an independent 16-point, two-step distribution generated entirely
+in memory. They never read, create, or overwrite production data shards; their metrics and
+checkpoints use a `-misspec-quick` identifier. A minimal end-to-end smoke command is:
+
+```bash
+python scripts/run_phase9.py --quick --device cpu --seeds 0 --epochs 1 \
+  --sigmas 0 0.1 --gammas 0 0.001
+```
 
 Every run writes to `results/<phase>-<config-hash>[-mode-knob][-quick]/`:
 

@@ -840,3 +840,341 @@ def test_phase45_saves_every_live_model_checkpoint(tmp_path, monkeypatch):
         assert payload.metadata.train_mode == "one-step"
         assert payload.metadata.architecture["kinetic_mode"] == "K1"
         assert payload.metadata.converged is False
+
+
+@pytest.mark.parametrize(
+    "by_dial",
+    [
+        {},
+        {"0.0": {"relative_to_A": {}}},
+        {"0.0": {"relative_to_A": {"C1": float("nan")}}},
+        {"0.0": {"relative_to_A": {"C1": float("inf")}}},
+        {"0.0": {"relative_to_A": {"C1": 0.8}}, "0.5": {"relative_to_A": {}}},
+    ],
+)
+def test_phase9_crossover_refuses_incomplete_or_nonfinite_ratios(by_dial):
+    from scripts.run_phase9 import locate_crossover
+
+    with pytest.raises(RuntimeError, match="complete finite"):
+        locate_crossover(by_dial, "C1")
+
+
+def test_phase9_crossover_distinguishes_located_from_bounded_complete_data():
+    from scripts.run_phase9 import locate_crossover
+
+    located = {
+        "0.0": {"relative_to_A": {"C1": 0.8}},
+        "0.5": {"relative_to_A": {"C1": 1.1}},
+    }
+    bounded = {
+        "0.0": {"relative_to_A": {"C1": 0.8}},
+        "0.5": {"relative_to_A": {"C1": 0.9}},
+    }
+
+    assert locate_crossover(located, "C1")["crossover"] == 0.5
+    result = locate_crossover(bounded, "C1")
+    assert result["crossover"] is None
+    assert result["bounded"] is not None
+
+
+def _phase9_seed_metrics(error: float, *, parameters: int = 10) -> dict:
+    return {
+        "one_step_test": error / 10,
+        "parameters": parameters,
+        "rollout": {
+            "steps": [1, 2],
+            "relative_error": [error / 2, error],
+            "mass_drift": [0.0, 0.0],
+            "energy_drift": [0.0, 0.0],
+            "energy_classification": "bounded",
+            "diverged_at": None,
+        },
+    }
+
+
+def test_phase9_aggregation_retains_auditable_absolute_errors_and_finite_ratios():
+    from scripts.run_phase9 import aggregate_seed_measurements
+
+    per_seed = {
+        0: {
+            "A": {"metrics": _phase9_seed_metrics(0.2), "converged": True},
+            "B-loop": {"metrics": _phase9_seed_metrics(0.1), "converged": True},
+            "C1": {"metrics": _phase9_seed_metrics(0.3), "converged": False},
+            "C2": {"metrics": _phase9_seed_metrics(0.4), "converged": True},
+            "C3": {"metrics": _phase9_seed_metrics(0.5), "converged": True},
+        },
+        1: {
+            "A": {"metrics": _phase9_seed_metrics(0.4), "converged": False},
+            "B-loop": {"metrics": _phase9_seed_metrics(0.2), "converged": True},
+            "C1": {"metrics": _phase9_seed_metrics(0.6), "converged": True},
+            "C2": {"metrics": _phase9_seed_metrics(0.8), "converged": True},
+            "C3": {"metrics": _phase9_seed_metrics(1.0), "converged": True},
+        },
+    }
+
+    result = aggregate_seed_measurements(per_seed, selected_horizon=2)
+
+    assert result["by_model"]["A"]["rollout_error_mean"] == pytest.approx(0.3)
+    assert result["by_model"]["A"]["rollout_error_min"] == 0.2
+    assert result["by_model"]["A"]["rollout_error_max"] == 0.4
+    assert result["by_model"]["A"]["converged"] == [True, False]
+    assert result["relative_to_A"] == pytest.approx(
+        {"B-loop": 0.5, "C1": 1.5, "C2": 2.0, "C3": 2.5}
+    )
+    assert [entry["seed"] for entry in result["by_model"]["C1"]["per_seed"]] == [0, 1]
+
+
+@pytest.mark.parametrize("invalid", [0.0, -1.0, float("nan"), float("inf")])
+def test_phase9_aggregation_refuses_nonpositive_or_nonfinite_rollout_errors(invalid):
+    from scripts.run_phase9 import aggregate_seed_measurements
+
+    per_seed = {
+        0: {
+            name: {
+                "metrics": _phase9_seed_metrics(invalid if name == "C1" else 0.2),
+                "converged": True,
+            }
+            for name in ("A", "B-loop", "C1", "C2", "C3")
+        }
+    }
+
+    with pytest.raises(RuntimeError, match="positive finite"):
+        aggregate_seed_measurements(per_seed, selected_horizon=2)
+
+
+def test_phase9_model_factory_pairs_seeds_and_uses_training_field_scale():
+    from scripts.run_phase9 import build_models
+
+    data = replace(DataConfig(), grid_size=8)
+    first = build_models(data, scale=0.75, seed=17)
+    second = build_models(data, scale=0.75, seed=17)
+
+    for name in first:
+        assert first[name].state_dict().keys() == second[name].state_dict().keys()
+        assert all(
+            torch.equal(value, second[name].state_dict()[key])
+            for key, value in first[name].state_dict().items()
+        )
+    assert float(first["A"].field_scale) == pytest.approx(0.75)
+    assert float(first["B-loop"].core.field_scale) == pytest.approx(0.75)
+
+
+def test_phase9_quick_shards_are_reduced_in_memory_and_carry_provenance(
+    tmp_path, monkeypatch
+):
+    from scripts.run_phase9 import prepare_shards, quick_data_config
+    from spno.misspecification import MisspecificationConfig
+
+    data = quick_data_config()
+    spec = MisspecificationConfig(nonlocal_sigma=0.1)
+    monkeypatch.setattr(
+        TrajectoryShard,
+        "save",
+        lambda *args, **kwargs: pytest.fail("quick shards must never be persisted"),
+    )
+
+    shards = prepare_shards(data, spec, quick=True, data_root=tmp_path)
+
+    assert data.grid_size == 16
+    assert (data.n_train, data.n_val, data.n_test, data.steps) == (2, 1, 2, 2)
+    assert shards["train"].trajectories.shape == (2, 3, 16)
+    assert shards["val"].metadata["reference"] == spec.provenance(data)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_phase9_reused_shards_must_match_canonical_provenance(tmp_path):
+    from scripts.run_phase9 import prepare_shards
+    from spno.misspecification import MisspecificationConfig
+
+    data = replace(
+        DataConfig(), grid_size=16, n_train=2, n_val=1, n_test=2, steps=2
+    )
+    spec = MisspecificationConfig(gain_loss_gamma=0.001)
+    paths = {
+        split: tmp_path / f"nls1d-{spec.identifier(data)}" / f"{split}.pt"
+        for split in ("train", "val", "test")
+    }
+    for split, path in paths.items():
+        shard = generate_shard(
+            data,
+            split,
+            reference=spec.reference(data),
+            reference_metadata=spec.provenance(data),
+        )
+        shard.metadata["reference"]["gain_loss_gamma"] = 0.002
+        shard.save(path)
+
+    with pytest.raises(RuntimeError, match="reference.*provenance"):
+        prepare_shards(data, spec, quick=False, data_root=tmp_path)
+
+
+def test_phase9_refuses_to_overwrite_a_partial_perturbed_shard_set(tmp_path):
+    from scripts.run_phase9 import prepare_shards
+    from spno.misspecification import MisspecificationConfig
+
+    data = replace(
+        DataConfig(), grid_size=16, n_train=2, n_val=1, n_test=2, steps=2
+    )
+    spec = MisspecificationConfig(nonlocal_sigma=0.1)
+    path = tmp_path / f"nls1d-{spec.identifier(data)}" / "train.pt"
+    generate_shard(
+        data,
+        "train",
+        reference=spec.reference(data),
+        reference_metadata=spec.provenance(data),
+    ).save(path)
+
+    with pytest.raises(RuntimeError, match="refusing to overwrite incomplete"):
+        prepare_shards(data, spec, quick=False, data_root=tmp_path)
+    assert path.exists()
+
+
+def test_phase9_tiny_dial_sweep_is_complete_auditable_and_quick_isolated(tmp_path):
+    import scripts.run_phase9 as phase9
+
+    data = DataConfig(
+        grid_size=16,
+        n_train=2,
+        n_val=1,
+        n_test=2,
+        steps=2,
+    )
+    args = argparse.Namespace(
+        quick=True,
+        seeds=[0],
+        epochs=9,
+        device="cpu",
+        sigmas=[0.0, 0.1],
+        gammas=[0.0, 0.001],
+    )
+    saved = {}
+    saved_identifier = None
+
+    def save(phase, identifier, payload):
+        nonlocal saved_identifier
+        saved_identifier = identifier
+        output = tmp_path / "results" / f"{phase}-{identifier}"
+        (output / "plots").mkdir(parents=True)
+        saved.update(payload)
+        return output
+
+    payload = phase9.run_sweep(
+        data,
+        args,
+        data_root=tmp_path / "production-data-must-stay-empty",
+        checkpoint_root=tmp_path / "checkpoints",
+        save=save,
+    )
+
+    assert payload == saved
+    assert payload["identifier"] == saved_identifier
+    assert saved_identifier.endswith("-misspec-quick")
+    assert payload["config"]["train"]["epochs"] == 1
+    assert not (tmp_path / "production-data-must-stay-empty").exists()
+    for dial, values in (("sigma", (0.0, 0.1)), ("gamma", (0.0, 0.001))):
+        measurements = payload["sweeps"][dial]["measurements"]
+        assert set(measurements) == {str(value) for value in values}
+        for measurement in measurements.values():
+            assert measurement["selected_horizon"] == 2
+            assert set(measurement["by_model"]) == {
+                "A", "B-loop", "C1", "C2", "C3"
+            }
+            assert set(measurement["relative_to_A"]) == {
+                "B-loop", "C1", "C2", "C3"
+            }
+            assert all(
+                math.isfinite(value) and value > 0
+                for value in measurement["relative_to_A"].values()
+            )
+            assert all(
+                model["rollout_error_min"]
+                <= model["rollout_error_mean"]
+                <= model["rollout_error_max"]
+                for model in measurement["by_model"].values()
+            )
+    checkpoints = list((tmp_path / "checkpoints").rglob("*.pt"))
+    assert len(checkpoints) == 20
+    first = load_checkpoint_payload(checkpoints[0])
+    assert first.metadata.converged is False
+    assert first.metadata.architecture["misspecification_identifier"]
+
+
+def test_phase8_loads_checkpointed_a_and_c1(tmp_path):
+    from scripts.run_phase8 import load_phase8_models
+
+    data = replace(DataConfig(), grid_size=16)
+    identifiers = {
+        "phase23": run_identifier(config_hash(data)),
+        "phase45": run_identifier(config_hash(data), "one-step", "K0L0"),
+    }
+    architecture_a = {
+        "modes": 2,
+        "width": 4,
+        "n_layers": 1,
+        "use_coordinate_channel": False,
+        "alpha_range": list(data.alpha_range),
+        "beta_range": list(data.beta_range),
+    }
+    original_a = _tiny_fno(data.domain, trained_dt=data.dt)
+    original_c1 = DensityPhaseSplitStep(
+        data.domain, kinetic_mode="K0", width=4, trained_dt=data.dt
+    )
+    for family, identifier, name, model, architecture in (
+        ("phase23", identifiers["phase23"], "A", original_a, architecture_a),
+        (
+            "phase45",
+            identifiers["phase45"],
+            "C1",
+            original_c1,
+            {"kinetic_mode": "K0", "local_mode": "L0", "width": 4},
+        ),
+    ):
+        save_checkpoint(
+            checkpoint_path(tmp_path, family, identifier, name, 7),
+            model,
+            CheckpointMetadata(
+                schema_version=1,
+                model_name=name,
+                data_hash=config_hash(data),
+                seed=7,
+                train_mode="one-step",
+                field_scale=1.0,
+                trained_dt=data.dt,
+                architecture=architecture,
+                converged=True,
+                best_epoch=1,
+            ),
+        )
+
+    restored = load_phase8_models(tmp_path, data, seeds=[7])
+
+    assert set(restored[7]) == {"A", "C1"}
+    for name, original in (("A", original_a), ("C1", original_c1)):
+        assert all(
+            torch.equal(value, restored[7][name].state_dict()[key])
+            for key, value in original.state_dict().items()
+        )
+
+
+def test_phase8_fine_grid_rebinding_is_exception_safe():
+    from scripts.run_phase8 import evaluate_on_fine_grid
+
+    coarse = DataConfig(grid_size=16)
+    fine = replace(coarse, grid_size=32)
+    model = _tiny_fno(coarse.domain, trained_dt=coarse.dt)
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("evaluation failed")
+
+    with pytest.raises(RuntimeError, match="evaluation failed"):
+        evaluate_on_fine_grid(
+            model,
+            coarse.domain,
+            fine.domain,
+            {},
+            fine,
+            TrainConfig(device="cpu"),
+            evaluator=fail,
+        )
+
+    assert model.domain == coarse.domain
