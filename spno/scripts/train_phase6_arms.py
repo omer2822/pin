@@ -1,8 +1,8 @@
 """Train the Phase 6-only ablations without mixing training into evaluation.
 
 This produces the matched-bandwidth ``A-wide`` checkpoint, the fixed-alpha G7
-checkpoints, and the multi-dt G6a checkpoints.  Phase 6 evaluation remains a pure
-checkpoint consumer in :mod:`scripts.run_phase6`.
+checkpoints, and the multi-dt G6a checkpoints. The standalone runner also uses this
+module to generate base data and train A/B-loop/C1/C2/C3 before evaluation.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from spno.experiments import (
     save_run,
 )
 from spno.models.fno import FNOStepOperator
+from spno.models.projected import MassProjectedOperator
 from spno.models.split_learned import (
     DensityPhaseSplitStep,
     FieldDensityPhaseSplitStep,
@@ -238,12 +239,13 @@ def train_phase6_arms(
     device: str,
     kinetic: str,
     quick: bool,
+    standalone: bool = False,
     data_root=DATA_ROOT,
     checkpoint_root=RESULTS_ROOT,
     artifact_root: Path | None = None,
     shift_specs: dict[str, ShiftSpec] = SHIFT_SPECS,
 ) -> dict:
-    """Train and persist every Phase 6-only arm."""
+    """Train Phase 6 arms, optionally generating data and training the base family."""
 
     seeds = tuple(seeds[:1] if quick else seeds)
     data_root = Path(data_root)
@@ -253,7 +255,14 @@ def train_phase6_arms(
         if artifact_root is None
         else Path(artifact_root)
     )
-    production = _load_shards(data_root, data_config)
+    production = (
+        {
+            split: _ensure_shard(data_root, config_hash(data_config), data_config, split)
+            for split in ("train", "val", "test")
+        }
+        if standalone
+        else _load_shards(data_root, data_config)
+    )
     production_scale = field_scale(production["train"], data_config.domain)
     shift_shards = _ensure_shift_shards(
         artifact_root, shift_specs, quick=quick
@@ -302,6 +311,7 @@ def train_phase6_arms(
         "field_scale": production_scale,
         "seeds": list(seeds),
         "quick": quick,
+        "standalone": standalone,
         "kinetic_mode": kinetic,
         "artifact_root": str(artifact_root),
         "A-wide": {"by_seed": {}},
@@ -321,6 +331,17 @@ def train_phase6_arms(
 
     for seed in seeds:
         seed_config = replace(train_config, seed=seed)
+        if standalone:
+            result.setdefault("base", {})[str(seed)] = _train_base_models(
+                production,
+                data_config,
+                seed_config,
+                scale=production_scale,
+                kinetic=kinetic,
+                quick=quick,
+                checkpoint_root=checkpoint_root,
+                identifier=identifier,
+            )
         torch.manual_seed(seed)
         wide_architecture = _fno_architecture(
             data_config,
@@ -480,6 +501,71 @@ def train_phase6_arms(
                 "checkpoint": str(path),
                 "history": history.as_dict(),
             }
+    return result
+
+
+def _train_base_models(
+    shards,
+    data_config: DataConfig,
+    train_config: TrainConfig,
+    *,
+    scale: float,
+    kinetic: str,
+    quick: bool,
+    checkpoint_root: Path,
+    identifier: str,
+) -> dict:
+    """Train the same base architectures/objective without running Phases 2-5."""
+
+    result = {}
+    for name in ("A", "B-loop", "C1", "C2", "C3"):
+        torch.manual_seed(train_config.seed)
+        if name in {"A", "B-loop"}:
+            model = FNOStepOperator(
+                data_config.domain,
+                modes=16,
+                width=64,
+                n_layers=4,
+                alpha_range=data_config.alpha_range,
+                beta_range=data_config.beta_range,
+                field_scale=scale,
+                trained_dt=data_config.dt,
+            )
+            architecture = _fno_architecture(
+                data_config, modes=16, width=64, n_layers=4,
+                kinetic=kinetic, dial="base",
+            )
+            if name == "B-loop":
+                model = MassProjectedOperator(model)
+                architecture["projection"] = "mass"
+        else:
+            model = _structured_model(
+                name, data_config, kinetic=kinetic, trained_dt=data_config.dt
+            )
+            architecture = _structured_architecture(name, data_config, kinetic, "base")
+        print(f"Phase 6 standalone: training {name}, seed {train_config.seed}", flush=True)
+        history = train_one_step(
+            model, shards["train"], shards["val"], data_config, train_config
+        )
+        path = checkpoint_path(
+            checkpoint_root, "phase6", identifier, name, train_config.seed
+        )
+        save_checkpoint(
+            path,
+            model,
+            _metadata(
+                name=name,
+                data_hash=config_hash(data_config),
+                seed=train_config.seed,
+                train_mode="one-step",
+                scale=scale,
+                trained_dt=data_config.dt,
+                architecture=architecture,
+                history=history,
+                quick=quick,
+            ),
+        )
+        result[name] = {"checkpoint": str(path), "history": history.as_dict()}
     return result
 
 

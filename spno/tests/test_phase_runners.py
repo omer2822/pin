@@ -341,6 +341,66 @@ def test_phase6_selected_arms_produce_complete_checkpoint_backed_measurements(tm
     assert result["G9"]["A"]["fraction_above_cutoff"]
 
 
+def test_phase6_standalone_runs_without_previous_phase_artifacts(tmp_path, monkeypatch):
+    import scripts.run_phase6 as runner
+    import spno.experiments as experiments
+
+    results = tmp_path / "results"
+    monkeypatch.setattr(runner, "RESULTS_ROOT", results)
+    monkeypatch.setattr(experiments, "RESULTS_ROOT", results)
+    monkeypatch.setattr(runner, "DATA_ROOT", tmp_path / "missing-production")
+    monkeypatch.setattr(experiments, "DATA_ROOT", tmp_path / "missing-production")
+
+    payload = runner.main([
+        "--standalone", "--quick", "--epochs", "1", "--device", "cpu",
+    ])
+
+    assert set(payload["experiments"]) == set(runner.ALL_ARMS)
+    assert payload["seeds"] == [0]
+    assert payload["standalone"] is True
+    assert payload["epochs"] == 1
+    assert not (tmp_path / "missing-production").exists()
+    assert not (results / "checkpoints" / "phase23").exists()
+    assert not (results / "checkpoints" / "phase45").exists()
+    checkpoints = list(results.rglob("*.pt"))
+    trained = [p for p in checkpoints if "checkpoints" in p.parts]
+    assert len(trained) == 12
+    assert all(not load_checkpoint_payload(p).metadata.converged for p in trained)
+    assert all(load_checkpoint_payload(p).metadata.best_epoch == 0 for p in trained)
+    output = results / f"phase6-{payload['identifier']}"
+    assert (output / "metrics.json").exists()
+    assert (output / "plots" / "phase6_g7.png").exists()
+
+
+def test_phase6_standalone_production_keeps_convergence_gate(tmp_path):
+    from scripts.run_phase6 import load_models
+    from scripts.train_phase6_arms import train_phase6_arms
+
+    data = replace(
+        DataConfig(), grid_size=16, steps=2, n_train=2, n_val=2, n_test=2,
+        substeps=2, initial_bandwidth=4,
+    )
+    fixed = ShiftSpec(
+        "G7-alpha-fixed", replace(data, alpha_range=(0.9, 0.9), seed=120)
+    )
+    result = train_phase6_arms(
+        data, seeds=(3,), epochs=1, device="cpu", kinetic="K1", quick=False,
+        standalone=True, data_root=tmp_path / "data", checkpoint_root=tmp_path,
+        artifact_root=tmp_path / "data", shift_specs={fixed.name: fixed},
+    )
+
+    trained = list((tmp_path / "checkpoints" / "phase6").rglob("*.pt"))
+    assert len(trained) == 12
+    assert result["seeds"] == [3]
+    for path in trained:
+        metadata = load_checkpoint_payload(path).metadata
+        assert metadata.seed == 3
+        assert metadata.architecture["kinetic_mode"] == "K1"
+        assert not metadata.converged
+    with pytest.raises(RuntimeError, match="budget-bound"):
+        load_models(tmp_path, data, (3,), "K1", standalone=True)
+
+
 def test_phase6_arm_trainer_persists_all_required_quick_artifacts(tmp_path, monkeypatch):
     import scripts.train_phase6_arms as trainer
 

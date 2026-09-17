@@ -18,8 +18,10 @@ Usage:
     python scripts/run_phase6.py [--quick] [--seeds 0 1 2] [--epochs 60]
                                  [--device auto] [--arms G1 G2 ...] [--kinetic K0]
 
-Nothing here trains: the runner consumes checkpoints produced by Phases 2-5 and must not
-be run before the convergence debt on those phases is cleared.
+By default this evaluates checkpoints produced by Phases 2-5 and the Phase 6 arm
+trainer. Use --standalone to generate isolated datasets and train every required
+checkpoint first; no previous phases are needed. Production evaluation still requires
+converged checkpoints. --standalone --quick is a small end-to-end plumbing check.
 """
 
 from __future__ import annotations
@@ -227,6 +229,7 @@ def load_models(
     kinetic: str,
     *,
     allow_budget_bound: bool = False,
+    standalone: bool = False,
 ) -> dict[int, dict[str, object]]:
     """Load the Phase 2-5 family plus the Phase 6 A-wide ablation."""
 
@@ -252,6 +255,13 @@ def load_models(
             f"--seeds {' '.join(map(str, seeds))}"
         ),
     }
+    if standalone:
+        command = (
+            "python scripts/run_phase6.py --standalone "
+            f"{'--quick ' if quick else ''}--kinetic {kinetic} "
+            f"--seeds {' '.join(map(str, seeds))} --epochs <larger-budget>"
+        )
+        commands = dict.fromkeys(commands, command)
 
     loaded = {}
     for seed in seeds:
@@ -259,7 +269,9 @@ def load_models(
         for name in ("A", "B-loop"):
             models[name] = _load_model(
                 checkpoint_path(
-                    Path(checkpoint_root), "phase23", phase23_identifier, name, seed
+                    Path(checkpoint_root),
+                    "phase6" if standalone else "phase23",
+                    phase6_identifier if standalone else phase23_identifier, name, seed
                 ),
                 data_config,
                 expected_name=name,
@@ -270,7 +282,9 @@ def load_models(
         for name in ("C1", "C2", "C3"):
             models[name] = _load_model(
                 checkpoint_path(
-                    Path(checkpoint_root), "phase45", phase45_identifier, name, seed
+                    Path(checkpoint_root),
+                    "phase6" if standalone else "phase45",
+                    phase6_identifier if standalone else phase45_identifier, name, seed
                 ),
                 data_config,
                 expected_name=name,
@@ -1200,8 +1214,15 @@ def make_plots(payload: dict, output) -> None:
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--quick", action="store_true")
+    parser.add_argument(
+        "--standalone", action="store_true",
+        help="generate isolated data and train all models before evaluation; no prior phases needed",
+    )
     parser.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
-    parser.add_argument("--epochs", type=int, default=60)
+    parser.add_argument(
+        "--epochs", type=int, default=None,
+        help="standalone training budget (default: 60, or 1 with --quick)",
+    )
     parser.add_argument("--device", default="auto")
     parser.add_argument("--arms", nargs="+", default=list(ALL_ARMS), choices=ALL_ARMS)
     parser.add_argument("--kinetic", default="K0", choices=("K0", "K1", "K2"))
@@ -1211,20 +1232,54 @@ def parse_args(argv=None) -> argparse.Namespace:
 def main(argv=None) -> dict:
     args = parse_args(argv)
     data_config = DataConfig()
+    if args.standalone and args.quick:
+        data_config = quick_data_config(data_config)
+    epochs = args.epochs if args.epochs is not None else (1 if args.quick else 60)
+    if epochs < 1:
+        raise ValueError("--epochs must be at least 1")
     domain = data_config.domain
     device = pick_device(args.device)
     identifier = run_identifier(
-        config_hash(data_config), args.kinetic, quick=args.quick
+        config_hash(data_config), args.kinetic,
+        "standalone" if args.standalone else "", quick=args.quick
     )
 
     seeds = args.seeds[:1] if args.quick else args.seeds
     gates = run_gates(domain, data_config)
+    checkpoint_root = RESULTS_ROOT
+    shift_root = phase6_artifact_root(quick=args.quick)
+    training = None
+    if args.standalone:
+        if __package__:
+            from scripts.train_phase6_arms import train_phase6_arms
+        else:
+            from train_phase6_arms import train_phase6_arms
+
+        checkpoint_root = RESULTS_ROOT / run_identifier(
+            "phase6-standalone-artifacts", quick=args.quick
+        )
+        shift_root = checkpoint_root / "data"
+        print(f"Preparing standalone Phase 6 artifacts in {checkpoint_root}", flush=True)
+        training = train_phase6_arms(
+            data_config,
+            seeds=seeds,
+            epochs=epochs,
+            device=device,
+            kinetic=args.kinetic,
+            quick=args.quick,
+            standalone=True,
+            data_root=shift_root,
+            checkpoint_root=checkpoint_root,
+            artifact_root=shift_root,
+        )
+        save_run("phase6-training", identifier, training)
     models_by_seed = load_models(
-        RESULTS_ROOT,
+        checkpoint_root,
         data_config,
         seeds,
         args.kinetic,
         allow_budget_bound=args.quick,
+        standalone=args.standalone,
     )
     parameter_counts = {
         name: model.parameter_count()
@@ -1237,7 +1292,9 @@ def main(argv=None) -> dict:
         "identifier": identifier,
         "device": device,
         "seeds": seeds,
-        "epochs": args.epochs,
+        "epochs": epochs,
+        "standalone": args.standalone,
+        "training": training,
         "kinetic_mode": args.kinetic,
         "quick": args.quick,
         "gates": gates,
@@ -1264,7 +1321,8 @@ def main(argv=None) -> dict:
             kinetic=args.kinetic,
             device=device,
             quick=args.quick,
-            checkpoint_root=RESULTS_ROOT,
+            checkpoint_root=checkpoint_root,
+            shift_root=shift_root,
             models_by_seed=models_by_seed,
         ),
     }

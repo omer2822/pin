@@ -54,20 +54,44 @@ real ones. Drop `--quick` (and raise `--epochs`) once you actually want numbers.
 
 Each phase has its own runner under `scripts/`, sharing a common flag set:
 
+Phase 6 can run independently, with no datasets or checkpoints from earlier phases:
+
+```bash
+python scripts/run_phase6.py --standalone --quick --device cpu  # complete smoke test
+python scripts/run_phase6.py --standalone --epochs 80 --seeds 0 1 2 --device auto
+```
+
+`--standalone` generates its own data, trains the five base models plus all Phase 6
+ablations, saves their checkpoints, and evaluates the selected arms. Each invocation
+retrains the models; previously generated datasets are reused. `--arms` selects the
+evaluations, while training prepares all arms. The quick version uses one seed, one
+epoch by default, and two trajectories of two steps, keeping the 64-point grid. Use
+`--epochs` to override the training budget.
+
+Standalone data and checkpoints live under `results/phase6-standalone-artifacts/`
+(`phase6-standalone-artifacts-quick/` for smoke tests). Metrics and plots have a
+`-standalone` identifier, and training histories are saved under `phase6-training-*`
+even if evaluation stops because a checkpoint is budget-bound. Full runs still require
+converged checkpoints: increase `--epochs` if that check fails. Quick results only
+verify the plumbing.
+
+The existing workflow using earlier-phase checkpoints is also available:
+
 ```bash
 python scripts/run_phase1.py --quick                      # generate the trajectory dataset
+python scripts/run_phase23.py --epochs 80 --seeds 0 1 2   # train A and B-loop
 python scripts/run_phase45.py --epochs 80 --seeds 0 1 2   # train the structured C-family
 python scripts/train_phase6_arms.py --epochs 80 --seeds 0 1 2  # train Phase 6 ablations
 python scripts/run_phase6.py --device auto                # checkpoint-only probes
 ```
 
-Common flags: `--quick`, `--seeds`, `--epochs`, `--device auto`. Phase 6 evaluates
+Common flags: `--quick`, `--seeds`, `--epochs`, `--device auto`. Without `--standalone`, Phase 6 evaluates
 checkpoints produced by Phases 2-5, while Phases 7-9 run their own controlled training or
 retraining arms. Base checkpoints must therefore be converged before Phase 6, and every
 newly trained arm must likewise be checked for budget-bound histories (`best_epoch` at the
 epoch cap) before its numbers are reported.
 
-Phase 6 has one additional dependency: run `train_phase6_arms.py` after the Phase 2-3
+In this existing workflow, Phase 6 has one additional dependency: run `train_phase6_arms.py` after the Phase 2-3
 and matching Phase 4-5 one-step/K0L0 jobs. It trains `A-wide`, the fixed-alpha G7
 ablation, and the multi-dt G6a arm. The evaluator restores every learned model strictly
 from these checkpoint families; it never substitutes freshly initialized weights.
