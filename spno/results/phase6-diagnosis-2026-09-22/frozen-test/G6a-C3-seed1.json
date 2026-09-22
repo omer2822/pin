@@ -1,0 +1,52 @@
+{
+  "tag": "G6a/C3",
+  "seed": 1,
+  "checkpoint": "C:\\Users\\omerm\\PycharmProjects\\pin\\spno\\results\\phase6-standalone-artifacts\\checkpoints\\phase6\\bd4e108527-K0\\G6a\\C3-seed1.pt",
+  "checkpoint_sha256": "8a739437bd26cb977f62221e9a47f1844caa62cef7b4ee4730e21d9f3337eb52",
+  "test_path": "C:\\Users\\omerm\\PycharmProjects\\pin\\spno\\results\\phase6-standalone-artifacts\\data\\nls1d-bd4e108527\\test.pt",
+  "test_sha256": "48a9c62bee58c9c22525076c329ee42f6279031f325d75829d572f275be7de33",
+  "saved_converged": true,
+  "policy": "frozen-budget diagnostic; original convergence metadata unchanged",
+  "metrics": {
+    "one_step_test": 0.001060557254962623,
+    "parameters": 288834,
+    "rollout": {
+      "steps": [
+        1,
+        10,
+        20,
+        50,
+        100,
+        200
+      ],
+      "relative_error": [
+        0.0010210120517118763,
+        0.0086910595740082,
+        0.016593397586136566,
+        0.03990147360413117,
+        0.07887049911898629,
+        0.1554894118785928
+      ],
+      "mass_drift": [
+        2.6201263381153693e-16,
+        2.4003021792395886e-15,
+        4.7717385598389225e-15,
+        1.1928236176572682e-14,
+        2.4245050411764168e-14,
+        4.829248112514506e-14
+      ],
+      "energy_drift": [
+        0.00012989622694256598,
+        0.0006368752649270799,
+        0.0008072570282130654,
+        0.00134314828046818,
+        0.0022835448696792372,
+        0.0039527084019797655
+      ],
+      "diverged_at": null,
+      "energy_classification": "bounded"
+    },
+    "rollout_precision": "float64/cpu"
+  },
+  "evaluation_seconds": 8.225215196609497
+}

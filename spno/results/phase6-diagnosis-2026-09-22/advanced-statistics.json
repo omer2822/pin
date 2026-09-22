@@ -1,0 +1,767 @@
+{
+  "created_at": "2026-09-22T11:13:11.716605+03:00",
+  "groups": {
+    "base/A": {
+      "values": [
+        0.0006376224192325026,
+        0.005859150575101376,
+        0.0006187988073565066
+      ],
+      "mean": 0.0023718572672301284,
+      "median": 0.0006376224192325026,
+      "std": 0.0030200992605266645,
+      "minimum": 0.0006187988073565066,
+      "maximum": 0.005859150575101376,
+      "cv_pct": 127.33056504928552,
+      "best_epochs_1based": [
+        40,
+        5,
+        40
+      ],
+      "epochs_run": [
+        40,
+        13,
+        40
+      ],
+      "passes_gate": [
+        false,
+        true,
+        false
+      ],
+      "final_val_over_online_train": [
+        1.101235400184216,
+        1.234360005972327,
+        1.1148237286038023
+      ],
+      "hours": [
+        0.9002206956677966,
+        0.25413775854640536,
+        0.7496018855439293
+      ],
+      "last5_improvement_pct": [
+        17.765003767524668,
+        25.405901383768096,
+        22.525177072598755
+      ],
+      "project_parameter_count": 287746,
+      "real_scalar_parameter_count": 549890,
+      "mean_vs_persistence_ratio": 0.010375684360406782,
+      "mean_vs_one_strang_step_ratio": 38.141243593078364
+    },
+    "base/B-loop": {
+      "values": [
+        0.0006031594784464687,
+        0.000575615579681471,
+        0.0005987977724988013
+      ],
+      "mean": 0.0005925242768755804,
+      "median": 0.0005987977724988013,
+      "std": 1.4804869141435843e-05,
+      "minimum": 0.000575615579681471,
+      "maximum": 0.0006031594784464687,
+      "cv_pct": 2.4986097142724506,
+      "best_epochs_1based": [
+        40,
+        40,
+        40
+      ],
+      "epochs_run": [
+        40,
+        40,
+        40
+      ],
+      "passes_gate": [
+        false,
+        false,
+        false
+      ],
+      "final_val_over_online_train": [
+        1.0955797984496518,
+        1.104345475037795,
+        1.1119319919303219
+      ],
+      "hours": [
+        0.841633327404658,
+        0.8023375048240026,
+        0.7628829203049342
+      ],
+      "last5_improvement_pct": [
+        14.02301972947253,
+        13.657078661571962,
+        23.03431392491037
+      ],
+      "project_parameter_count": 287746,
+      "real_scalar_parameter_count": 549890,
+      "mean_vs_persistence_ratio": 0.002591996136394326,
+      "mean_vs_one_strang_step_ratio": 9.528234726162975
+    },
+    "base/C1": {
+      "values": [
+        0.0005552471644710749,
+        0.00051955823963508,
+        0.00048646886898204685
+      ],
+      "mean": 0.0005204247576960673,
+      "median": 0.00051955823963508,
+      "std": 3.439733452982262e-05,
+      "minimum": 0.00048646886898204685,
+      "maximum": 0.0005552471644710749,
+      "cv_pct": 6.609473131543633,
+      "best_epochs_1based": [
+        39,
+        40,
+        40
+      ],
+      "epochs_run": [
+        40,
+        40,
+        40
+      ],
+      "passes_gate": [
+        true,
+        false,
+        false
+      ],
+      "final_val_over_online_train": [
+        1.0763055348262958,
+        1.0700752626910106,
+        1.0663023758528511
+      ],
+      "hours": [
+        0.12180432783232795,
+        0.11190228958924611,
+        0.10275479813416799
+      ],
+      "last5_improvement_pct": [
+        1.04668448086368,
+        0.6900868664444029,
+        0.7402999517699687
+      ],
+      "project_parameter_count": 2466,
+      "real_scalar_parameter_count": 2466,
+      "mean_vs_persistence_ratio": 0.002276596949487376,
+      "mean_vs_one_strang_step_ratio": 8.36882038788744
+    },
+    "base/C2": {
+      "values": [
+        0.0006196805552579462,
+        0.0006336283979006111,
+        0.000553654637793079
+      ],
+      "mean": 0.0006023211969838788,
+      "median": 0.0006196805552579462,
+      "std": 4.271956303849386e-05,
+      "minimum": 0.000553654637793079,
+      "maximum": 0.0006336283979006111,
+      "cv_pct": 7.092488733986437,
+      "best_epochs_1based": [
+        40,
+        40,
+        40
+      ],
+      "epochs_run": [
+        40,
+        40,
+        40
+      ],
+      "passes_gate": [
+        false,
+        false,
+        false
+      ],
+      "final_val_over_online_train": [
+        1.0771203651532395,
+        1.0799452042645314,
+        1.0912027826981934
+      ],
+      "hours": [
+        0.967074283560117,
+        0.8589373317029741,
+        0.8082350066635344
+      ],
+      "last5_improvement_pct": [
+        3.7424454074131797,
+        5.203472375543427,
+        2.8413583136214355
+      ],
+      "project_parameter_count": 288770,
+      "real_scalar_parameter_count": 550914,
+      "mean_vs_persistence_ratio": 0.002634852741702003,
+      "mean_vs_one_strang_step_ratio": 9.685776548546286
+    },
+    "base/C3": {
+      "values": [
+        0.0006803464091382921,
+        0.0006118789518717677,
+        0.0005199373583775013
+      ],
+      "mean": 0.0006040542397958537,
+      "median": 0.0006118789518717677,
+      "std": 8.049028190283411e-05,
+      "minimum": 0.0005199373583775013,
+      "maximum": 0.0006803464091382921,
+      "cv_pct": 13.325009014097247,
+      "best_epochs_1based": [
+        40,
+        40,
+        40
+      ],
+      "epochs_run": [
+        40,
+        40,
+        40
+      ],
+      "passes_gate": [
+        false,
+        false,
+        false
+      ],
+      "final_val_over_online_train": [
+        1.080810477862636,
+        1.0915434787925267,
+        1.0903651238638428
+      ],
+      "hours": [
+        0.9697188910510804,
+        0.8860516271326278,
+        0.8452819426192177
+      ],
+      "last5_improvement_pct": [
+        4.404335351973601,
+        5.212118796094878,
+        5.492755162571333
+      ],
+      "project_parameter_count": 288834,
+      "real_scalar_parameter_count": 550978,
+      "mean_vs_persistence_ratio": 0.002642433933643254,
+      "mean_vs_one_strang_step_ratio": 9.713645176630285
+    },
+    "base/A-wide": {
+      "values": [
+        0.0005851270139217376,
+        0.0006274282871279865,
+        0.0005594157738145441
+      ],
+      "mean": 0.0005906570249547561,
+      "median": 0.0005851270139217376,
+      "std": 3.4341829571555664e-05,
+      "minimum": 0.0005594157738145441,
+      "maximum": 0.0006274282871279865,
+      "cv_pct": 5.814174405897606,
+      "best_epochs_1based": [
+        40,
+        40,
+        40
+      ],
+      "epochs_run": [
+        40,
+        40,
+        40
+      ],
+      "passes_gate": [
+        false,
+        false,
+        false
+      ],
+      "final_val_over_online_train": [
+        1.1256718357174953,
+        1.1207251682967743,
+        1.127357707019585
+      ],
+      "hours": [
+        1.337094125946363,
+        1.1635196741422018,
+        1.0698475007216135
+      ],
+      "last5_improvement_pct": [
+        21.89134249946933,
+        20.925583982067266,
+        24.264525648338193
+      ],
+      "project_parameter_count": 549890,
+      "real_scalar_parameter_count": 1074178,
+      "mean_vs_persistence_ratio": 0.002583827847003767,
+      "mean_vs_one_strang_step_ratio": 9.498207914960725
+    },
+    "G6a/C1": {
+      "values": [
+        0.00043153432151302694,
+        0.00046962629319168627,
+        0.00045364319435320795
+      ],
+      "mean": 0.00045160126968597374,
+      "median": 0.00045364319435320795,
+      "std": 1.9127902886933026e-05,
+      "minimum": 0.00043153432151302694,
+      "maximum": 0.00046962629319168627,
+      "cv_pct": 4.235573318966495,
+      "best_epochs_1based": [
+        40,
+        40,
+        39
+      ],
+      "epochs_run": [
+        40,
+        40,
+        40
+      ],
+      "passes_gate": [
+        false,
+        false,
+        true
+      ],
+      "final_val_over_online_train": [
+        0.9289338238978441,
+        0.9353438562157586,
+        0.9409114084861375
+      ],
+      "hours": [
+        0.36166331397162543,
+        0.3432165173689524,
+        0.3041400807433658
+      ],
+      "last5_improvement_pct": [
+        0.7429297721565359,
+        0.9009234700021659,
+        2.519734785097581
+      ],
+      "project_parameter_count": 2466,
+      "real_scalar_parameter_count": 2466,
+      "mean_vs_persistence_ratio": 0.001975528753672671,
+      "mean_vs_one_strang_step_ratio": 7.262087087622794
+    },
+    "G6a/C2": {
+      "values": [
+        0.00037890696919057516,
+        0.0003984778400976211,
+        0.0003725349764572456
+      ],
+      "mean": 0.00038330659524848064,
+      "median": 0.00037890696919057516,
+      "std": 1.3519451747494396e-05,
+      "minimum": 0.0003725349764572456,
+      "maximum": 0.0003984778400976211,
+      "cv_pct": 3.527059517128928,
+      "best_epochs_1based": [
+        40,
+        40,
+        40
+      ],
+      "epochs_run": [
+        40,
+        40,
+        40
+      ],
+      "passes_gate": [
+        false,
+        false,
+        false
+      ],
+      "final_val_over_online_train": [
+        0.9441638592614489,
+        0.9336003889155265,
+        0.9584683370238136
+      ],
+      "hours": [
+        26.281811409658857,
+        7.12046159280671,
+        26.175426071683567
+      ],
+      "last5_improvement_pct": [
+        2.429791776865867,
+        7.672394700896282,
+        1.655311986017339
+      ],
+      "project_parameter_count": 288770,
+      "real_scalar_parameter_count": 550914,
+      "mean_vs_persistence_ratio": 0.0016767738516596665,
+      "mean_vs_one_strang_step_ratio": 6.163857506180753
+    },
+    "G6a/C3": {
+      "values": [
+        0.0006883768935222179,
+        0.0010509051971137524,
+        0.00034297357473988085
+      ],
+      "mean": 0.0006940852217919504,
+      "median": 0.0006883768935222179,
+      "std": 0.0003540003308585343,
+      "minimum": 0.00034297357473988085,
+      "maximum": 0.0010509051971137524,
+      "cv_pct": 51.00243021232985,
+      "best_epochs_1based": [
+        13,
+        11,
+        40
+      ],
+      "epochs_run": [
+        21,
+        19,
+        40
+      ],
+      "passes_gate": [
+        true,
+        true,
+        false
+      ],
+      "final_val_over_online_train": [
+        0.7372407048831593,
+        0.863041207573013,
+        0.9515299420741202
+      ],
+      "hours": [
+        1.5744325681527456,
+        1.593972185055415,
+        2.6420503713687262
+      ],
+      "last5_improvement_pct": [
+        61.952055190849315,
+        53.01780482991072,
+        42.92098106664892
+      ],
+      "project_parameter_count": 288834,
+      "real_scalar_parameter_count": 550978,
+      "mean_vs_persistence_ratio": 0.003036274264912366,
+      "mean_vs_one_strang_step_ratio": 11.161410884407172
+    },
+    "G7-alpha-fixed/A": {
+      "values": [
+        0.0004755874934606254,
+        0.0004560304180951789,
+        0.00045714141190983355
+      ],
+      "mean": 0.00046291977448854595,
+      "median": 0.00045714141190983355,
+      "std": 1.0984621285266818e-05,
+      "minimum": 0.0004560304180951789,
+      "maximum": 0.0004755874934606254,
+      "cv_pct": 2.37289955854729,
+      "best_epochs_1based": [
+        40,
+        40,
+        40
+      ],
+      "epochs_run": [
+        40,
+        40,
+        40
+      ],
+      "passes_gate": [
+        false,
+        false,
+        false
+      ],
+      "final_val_over_online_train": [
+        0.9842581541580614,
+        0.9804987449072593,
+        0.992221432686333
+      ],
+      "hours": [
+        0.9018695902824402,
+        0.8208045827680164,
+        0.7475737322701348
+      ],
+      "last5_improvement_pct": [
+        41.78691618094126,
+        30.424087486296326,
+        37.693451904845865
+      ],
+      "project_parameter_count": 287746,
+      "real_scalar_parameter_count": 549890
+    },
+    "G7-alpha-fixed/C1": {
+      "values": [
+        0.00046355326215270906,
+        0.00047192604239098727,
+        0.00046343211301136763
+      ],
+      "mean": 0.000466303805851688,
+      "median": 0.00046355326215270906,
+      "std": 4.869376454586965e-06,
+      "minimum": 0.00046343211301136763,
+      "maximum": 0.00047192604239098727,
+      "cv_pct": 1.0442497773942065,
+      "best_epochs_1based": [
+        40,
+        40,
+        40
+      ],
+      "epochs_run": [
+        40,
+        40,
+        40
+      ],
+      "passes_gate": [
+        false,
+        false,
+        false
+      ],
+      "final_val_over_online_train": [
+        0.9611731909536919,
+        0.9557815634338579,
+        0.955178819786863
+      ],
+      "hours": [
+        0.12404482543468476,
+        0.12127964437007904,
+        0.10234722687138452
+      ],
+      "last5_improvement_pct": [
+        0.40580855928101284,
+        0.3174844603611337,
+        0.7042907156098484
+      ],
+      "project_parameter_count": 2466,
+      "real_scalar_parameter_count": 2466
+    },
+    "G7-alpha-fixed/C2": {
+      "values": [
+        0.0017031931385397912,
+        0.0003784321072977036,
+        0.0009543385714292527
+      ],
+      "mean": 0.0010119879390889158,
+      "median": 0.0009543385714292527,
+      "std": 0.0006642593880917823,
+      "minimum": 0.0003784321072977036,
+      "maximum": 0.0017031931385397912,
+      "cv_pct": 65.63906173524256,
+      "best_epochs_1based": [
+        8,
+        40,
+        13
+      ],
+      "epochs_run": [
+        16,
+        40,
+        21
+      ],
+      "passes_gate": [
+        true,
+        false,
+        true
+      ],
+      "final_val_over_online_train": [
+        0.6411132258432868,
+        0.9652704518979467,
+        0.9743733887285281
+      ],
+      "hours": [
+        0.39505507859918804,
+        0.8082370978593826,
+        0.42290878309143914
+      ],
+      "last5_improvement_pct": [
+        60.10649610500613,
+        6.680416427602903,
+        16.298061206606086
+      ],
+      "project_parameter_count": 288770,
+      "real_scalar_parameter_count": 550914
+    }
+  },
+  "comparisons": {
+    "base/C1 vs base/A": {
+      "lower_error_pct_by_seed": [
+        12.919127727751734,
+        91.13253306984535,
+        21.384969848240335
+      ],
+      "lower_mean_error_pct": 78.05834419775931,
+      "lower_median_error_pct": 18.516315618189015
+    },
+    "base/C1 vs base/B-loop": {
+      "lower_error_pct_by_seed": [
+        7.943556503298163,
+        9.738676648990545,
+        18.759071705962192
+      ],
+      "lower_mean_error_pct": 12.16819664498789,
+      "lower_median_error_pct": 13.233104146839475
+    },
+    "base/C1 vs base/C2": {
+      "lower_error_pct_by_seed": [
+        10.39783969985156,
+        18.002690321879125,
+        12.13495999579108
+      ],
+      "lower_mean_error_pct": 13.596805109617208,
+      "lower_median_error_pct": 16.15708525519081
+    },
+    "base/C1 vs base/C3": {
+      "lower_error_pct_by_seed": [
+        18.38758064816781,
+        15.088067983753,
+        6.437023394490272
+      ],
+      "lower_mean_error_pct": 13.8446974775063,
+      "lower_median_error_pct": 15.088067983753
+    },
+    "base/C1 vs base/A-wide": {
+      "lower_error_pct_by_seed": [
+        5.106557848081037,
+        17.19241062379811,
+        13.039836959742287
+      ],
+      "lower_mean_error_pct": 11.890532795079952,
+      "lower_median_error_pct": 11.205904483402913
+    },
+    "base/B-loop vs base/A": {
+      "lower_error_pct_by_seed": [
+        5.404913589380447,
+        90.17578448781356,
+        3.232235521453113
+      ],
+      "lower_mean_error_pct": 75.01855254690203,
+      "lower_median_error_pct": 6.088971397905664
+    },
+    "base/A-wide vs base/A": {
+      "lower_error_pct_by_seed": [
+        8.232992399162022,
+        89.29148041024477,
+        9.59650096865011
+      ],
+      "lower_mean_error_pct": 75.09727785413793,
+      "lower_median_error_pct": 8.232992399162022
+    },
+    "G6a/C1 vs base/C1": {
+      "lower_error_pct_by_seed": [
+        22.280679825874675,
+        9.61046185668507,
+        6.747744145998032
+      ],
+      "lower_mean_error_pct": 13.22448384561425,
+      "lower_median_error_pct": 12.686748135910342
+    },
+    "G6a/C2 vs base/C2": {
+      "lower_error_pct_by_seed": [
+        38.85446848774325,
+        37.111745398740005,
+        32.71347316041528
+      ],
+      "lower_mean_error_pct": 36.36176226772576,
+      "lower_median_error_pct": 38.85446848774325
+    },
+    "G6a/C3 vs base/C3": {
+      "lower_error_pct_by_seed": [
+        -1.180352284668772,
+        -71.75050619064146,
+        34.035596939955916
+      ],
+      "lower_mean_error_pct": -14.904453286599495,
+      "lower_median_error_pct": -12.502136479190744
+    },
+    "G6a/C2 vs G6a/C1": {
+      "lower_error_pct_by_seed": [
+        12.195403632770631,
+        15.150014836376439,
+        17.879297850286104
+      ],
+      "lower_mean_error_pct": 15.122781759445141,
+      "lower_median_error_pct": 16.474671303994686
+    }
+  },
+  "reference_baselines": {
+    "torch.complex64": {
+      "n_pairs": 20000,
+      "n_trajectories": 100,
+      "persistence_mean": 0.22859766978658735,
+      "one_strang_step_mean": 6.218615450862117e-05,
+      "dtype": "torch.complex64"
+    },
+    "torch.complex128": {
+      "n_pairs": 20000,
+      "n_trajectories": 100,
+      "persistence_mean": 0.22859767010058685,
+      "one_strang_step_mean": 6.218425708246312e-05,
+      "dtype": "torch.complex128"
+    }
+  },
+  "base_and_multi_dt_validation_identical": {
+    "trajectories": true,
+    "potential": true,
+    "alpha": true,
+    "beta": true,
+    "trajectory_ids": true
+  },
+  "approximate_matched_updates": {
+    "C1": {
+      "multi_dt_first13_best": [
+        0.0008291329056955874,
+        0.000623084629047662,
+        0.0006936642429791391
+      ],
+      "base_up_to40_best": [
+        0.0005552471644710749,
+        0.00051955823963508,
+        0.00048646886898204685
+      ],
+      "lower_error_pct_by_seed": [
+        -49.326814930322854,
+        -19.925848829824233,
+        -42.591702616172704
+      ],
+      "multi_updates": 24375,
+      "base_updates": 25000,
+      "caveat": "Approximate update count only; different LR schedule position, data distribution, and checkpoint selection opportunities."
+    },
+    "C2": {
+      "multi_dt_first13_best": [
+        0.0011606010149233044,
+        0.0011892774667590857,
+        0.0009529029592871666
+      ],
+      "base_up_to40_best": [
+        0.0006196805552579462,
+        0.0006336283979006111,
+        0.000553654637793079
+      ],
+      "lower_error_pct_by_seed": [
+        -87.29021026651326,
+        -87.69320799059764,
+        -72.11143811339322
+      ],
+      "multi_updates": 24375,
+      "base_updates": 25000,
+      "caveat": "Approximate update count only; different LR schedule position, data distribution, and checkpoint selection opportunities."
+    },
+    "C3": {
+      "multi_dt_first13_best": [
+        0.0006883768935222179,
+        0.0010509051971137524,
+        0.001115980674419552
+      ],
+      "base_up_to40_best": [
+        0.0006803464091382921,
+        0.0006118789518717677,
+        0.0005199373583775013
+      ],
+      "lower_error_pct_by_seed": [
+        -1.180352284668772,
+        -71.75050619064146,
+        -114.637524393716
+      ],
+      "multi_updates": 24375,
+      "base_updates": 25000,
+      "caveat": "Approximate update count only; different LR schedule position, data distribution, and checkpoint selection opportunities."
+    }
+  },
+  "saved_training_data": {
+    "n_train": 800,
+    "n_val": 100,
+    "frames": 201,
+    "grid": 64,
+    "dt": 0.01,
+    "pairs_per_epoch_base": 160000,
+    "pairs_per_epoch_multi_dt": 480000,
+    "updates_per_epoch_base": 625,
+    "updates_per_epoch_multi_dt": 1875
+  },
+  "notes": [
+    "Only saved validation histories were used for learned-model comparisons.",
+    "New computations are persistence and one-Strang-step baselines, not trained-model test evaluations.",
+    "No test, rollout, spectral-identification, conservation or distribution-shift experiment was run.",
+    "Means and sample standard deviations are descriptive across 3 training seeds, not confidence intervals.",
+    "All seeds share a validation split: 20,000 frame pairs from 100 trajectories are not 20,000 independent trajectories."
+  ]
+}

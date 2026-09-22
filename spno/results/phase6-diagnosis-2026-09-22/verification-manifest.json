@@ -1,0 +1,20 @@
+{
+  "evaluation_checkout_commit": "45b77c1ead8eb2c49a8e65c1d146ecccc3b62831",
+  "n_audited_checkpoints": 36,
+  "n_new_test_checkpoints": 27,
+  "n_new_probe_checkpoints": 27,
+  "n_endpoint_diagnostic_checkpoints": 18,
+  "unchanged_checkpoint_hashes_verified": true,
+  "report_links_verified": 13,
+  "code_sha256": {
+    "scripts/run_phase6.py": "a3c538283d499fc103dcee429005e655f833386b33f20c446b6dc1a278aee84b",
+    "src/spno/models/split_learned.py": "53f56b4bbbc031dd997c268a26423c155876404817fd04054f240f46374a61fd",
+    "src/spno/models/fno.py": "9216df41c8e4a38d2a75340a69c1828964b49659e0b8705d572be1b865354b58",
+    "src/spno/checkpoints.py": "008d30131f9dcc1bac6285ecebaffd336dc4d9c512f6b2e993400861d9ed3d26",
+    "src/spno/precision.py": "d2ffb4c6823e42bbcb8b824dbc6e9497b3a5e42ea10acfd8e7e6b4a9e6a5836a",
+    "src/spno/experiments.py": "fcb4233d5d2b0a8939dd21c0c34faa50d6b4ff8e89a86f6aa3843997f78ff9b7",
+    "src/spno/evaluation/rollout.py": "67819fdd0551dd294ab33c4cf6576096d328e822e1dc8ee7346c7897df98407c",
+    "src/spno/train.py": "6453e7d7edfdf3382912d2f9b5abb1c83f0f8993e03685bbbebb47e28fd5224a"
+  },
+  "note": "Evaluation checkout recorded now; this does not establish the original training commit."
+}
