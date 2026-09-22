@@ -1226,11 +1226,17 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--arms", nargs="+", default=list(ALL_ARMS), choices=ALL_ARMS)
     parser.add_argument("--kinetic", default="K0", choices=("K0", "K1", "K2"))
-    return parser.parse_args(argv)
+    from spno.phase_workflow import add_workflow_arguments, parse_workflow_args
+    add_workflow_arguments(parser)
+    return parse_workflow_args(parser, argv)
 
 
 def main(argv=None) -> dict:
     args = parse_args(argv)
+    if args.stage is not None:
+        from spno.phase_workflow import run_stage
+        return run_stage(6, args)
+
     data_config = DataConfig()
     if args.standalone and args.quick:
         data_config = quick_data_config(data_config)

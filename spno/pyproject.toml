@@ -16,6 +16,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+dirichlet = ["scipy>=1.11"]
+notebooks = ["ipykernel>=6", "nbformat>=5", "nbclient>=0.10"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

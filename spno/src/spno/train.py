@@ -9,7 +9,7 @@ Normalization statistics come from the training split only.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import asdict, dataclass, field as dataclass_field
 import time
 
 import torch
@@ -25,6 +25,7 @@ from .domain import PeriodicDomain, l2_mass
 from .losses.pde_residual import residual_loss
 from .losses.relative_l2 import relative_l2_loss
 from .seeding import seed_everything
+from .training_progress import TrainingProgress
 
 Tensor = torch.Tensor
 
@@ -131,6 +132,7 @@ def train_one_step(
     config: TrainConfig,
     *,
     verbose: bool = True,
+    progress: TrainingProgress | None = None,
 ) -> TrainHistory:
     """Train on consecutive frame pairs with relative-L2, early stopping on val."""
 
@@ -157,8 +159,20 @@ def train_one_step(
     history = TrainHistory()
     best_state = None
     started = time.time()
+    elapsed_before = 0.0
+    start_epoch = 0
+    context = {"data": asdict(data_config), "train": asdict(config), "mode": 'one-step'}
+    context["train"].pop("device")
+    context["train"].pop("log_every")
+    if progress is not None:
+        saved = progress.restore(model, optimizer, scheduler, generator, context)
+        if saved is not None:
+            history = TrainHistory(**saved["history"])
+            best_state = saved["best_state"]
+            elapsed_before = history.seconds
+            start_epoch = config.epochs if saved["complete"] else saved["epoch"] + 1
 
-    for epoch in range(config.epochs):
+    for epoch in range(start_epoch, config.epochs):
         model.train()
         running, seen = 0.0, 0
         for batch in train_batches.batches(config.batch_size, generator):
@@ -189,6 +203,14 @@ def train_one_step(
                 + ("  *" if history.best_epoch == epoch else "")
             )
 
+        if progress is not None:
+            history.seconds = elapsed_before + time.time() - started
+            progress.save(
+                model=model, optimizer=optimizer, scheduler=scheduler, generator=generator,
+                context=context, history=history, best_state=best_state, epoch=epoch,
+                complete=epoch + 1 >= config.epochs or epoch - history.best_epoch >= config.patience,
+                selected_indices=locals().get("chosen"),
+            )
         if epoch - history.best_epoch >= config.patience:
             if verbose:
                 print(f"  early stop at epoch {epoch} (patience {config.patience})")
@@ -196,7 +218,7 @@ def train_one_step(
 
     if best_state is not None:
         model.load_state_dict(best_state)
-    history.seconds = time.time() - started
+    history.seconds = elapsed_before + time.time() - started
     return history
 
 
@@ -298,6 +320,7 @@ def train_multi_dt(
     config: TrainConfig,
     *,
     verbose: bool = True,
+    progress: TrainingProgress | None = None,
 ) -> TrainHistory:
     """One-step training over several ``dt`` at once: the G6a arm.
 
@@ -350,8 +373,20 @@ def train_multi_dt(
     history = TrainHistory()
     best_state = None
     started = time.time()
+    elapsed_before = 0.0
+    start_epoch = 0
+    context = {"data": asdict(data_config), "train": asdict(config), "mode": 'multi-dt'}
+    context["train"].pop("device")
+    context["train"].pop("log_every")
+    if progress is not None:
+        saved = progress.restore(model, optimizer, scheduler, generator, context)
+        if saved is not None:
+            history = TrainHistory(**saved["history"])
+            best_state = saved["best_state"]
+            elapsed_before = history.seconds
+            start_epoch = config.epochs if saved["complete"] else saved["epoch"] + 1
 
-    for epoch in range(config.epochs):
+    for epoch in range(start_epoch, config.epochs):
         model.train()
         running, seen = 0.0, 0
         for batch in train_batches.batches(config.batch_size, generator):
@@ -382,6 +417,14 @@ def train_multi_dt(
                 + ("  *" if history.best_epoch == epoch else "")
             )
 
+        if progress is not None:
+            history.seconds = elapsed_before + time.time() - started
+            progress.save(
+                model=model, optimizer=optimizer, scheduler=scheduler, generator=generator,
+                context=context, history=history, best_state=best_state, epoch=epoch,
+                complete=epoch + 1 >= config.epochs or epoch - history.best_epoch >= config.patience,
+                selected_indices=locals().get("chosen"),
+            )
         if epoch - history.best_epoch >= config.patience:
             if verbose:
                 print(f"  early stop at epoch {epoch} (patience {config.patience})")
@@ -389,7 +432,7 @@ def train_multi_dt(
 
     if best_state is not None:
         model.load_state_dict(best_state)
-    history.seconds = time.time() - started
+    history.seconds = elapsed_before + time.time() - started
     return history
 
 
@@ -429,6 +472,7 @@ def train_pino(
     *,
     physics_weight: float,
     verbose: bool = True,
+    progress: TrainingProgress | None = None,
 ) -> TrainHistory:
     """One-step training with a soft PDE-residual penalty: Phase 7a.
 
@@ -474,8 +518,21 @@ def train_pino(
     history = TrainHistory()
     best_state = None
     started = time.time()
+    elapsed_before = 0.0
+    start_epoch = 0
+    context = {"data": asdict(data_config), "train": asdict(config), "mode": 'pino'}
+    context["train"].pop("device")
+    context["train"].pop("log_every")
+    context["physics_weight"] = physics_weight
+    if progress is not None:
+        saved = progress.restore(model, optimizer, scheduler, generator, context)
+        if saved is not None:
+            history = TrainHistory(**saved["history"])
+            best_state = saved["best_state"]
+            elapsed_before = history.seconds
+            start_epoch = config.epochs if saved["complete"] else saved["epoch"] + 1
 
-    for epoch in range(config.epochs):
+    for epoch in range(start_epoch, config.epochs):
         model.train()
         running, seen = 0.0, 0
         for batch in train_batches.batches(config.batch_size, generator):
@@ -507,6 +564,14 @@ def train_pino(
                 + ("  *" if history.best_epoch == epoch else "")
             )
 
+        if progress is not None:
+            history.seconds = elapsed_before + time.time() - started
+            progress.save(
+                model=model, optimizer=optimizer, scheduler=scheduler, generator=generator,
+                context=context, history=history, best_state=best_state, epoch=epoch,
+                complete=epoch + 1 >= config.epochs or epoch - history.best_epoch >= config.patience,
+                selected_indices=locals().get("chosen"),
+            )
         if epoch - history.best_epoch >= config.patience:
             if verbose:
                 print(f"  early stop at epoch {epoch} (patience {config.patience})")
@@ -514,5 +579,5 @@ def train_pino(
 
     if best_state is not None:
         model.load_state_dict(best_state)
-    history.seconds = time.time() - started
+    history.seconds = elapsed_before + time.time() - started
     return history

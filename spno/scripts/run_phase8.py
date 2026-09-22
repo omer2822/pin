@@ -390,6 +390,8 @@ def robustness_section(
     data_config: DataConfig,
     train_config: TrainConfig,
     args: argparse.Namespace,
+    *,
+    sample_measurements: dict | None = None,
 ) -> dict:
     """Measure separate noisy channels and retrained sample-efficiency curves."""
 
@@ -459,9 +461,9 @@ def robustness_section(
         model_errors["potential_noise"][key] = _numeric_model_errors(potential_summary)
 
     total_pairs = shards["train"].n_trajectories * (shards["train"].n_frames - 1)
-    sample_efficiency = {}
+    sample_efficiency = dict(sample_measurements or {})
     scale = field_scale(shards["train"], domain)
-    for fraction in args.train_fractions:
+    for fraction in (args.train_fractions if sample_measurements is None else []):
         pair_budget = int(total_pairs * fraction)
         per_seed: dict[int, dict] = {}
         histories: dict[str, dict] = {}
@@ -498,6 +500,8 @@ def robustness_section(
         }
         model_errors["sample_efficiency"][key] = _numeric_model_errors(summary)
 
+    for key, measurement in sample_efficiency.items():
+        model_errors["sample_efficiency"][key] = _numeric_model_errors(measurement["by_model"])
     return {
         "separately_swept": "field and potential noise are never applied jointly; "
         "both retain clean targets for the errors reported here",
@@ -578,7 +582,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--train-fractions", type=float, nargs="+", default=[0.05, 0.1, 0.25, 0.5, 1.0]
     )
-    return parser.parse_args(argv)
+    from spno.phase_workflow import add_workflow_arguments, parse_workflow_args
+    add_workflow_arguments(parser)
+    return parse_workflow_args(parser, argv)
 
 
 def prepare_shards(data_config: DataConfig, *, quick: bool) -> dict[str, TrajectoryShard]:
@@ -591,6 +597,10 @@ def prepare_shards(data_config: DataConfig, *, quick: bool) -> dict[str, Traject
 
 def main(argv=None) -> dict:
     args = parse_args(argv)
+    if args.stage is not None:
+        from spno.phase_workflow import run_stage
+        return run_stage(8, args)
+
     if args.quick:
         # A smoke run verifies every arm without multiplying an already complete
         # measurement suite; its checkpoint-compatible coarse grid stays unchanged.

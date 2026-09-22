@@ -69,7 +69,7 @@ def build_pino_model(
     )
 
 
-def aggregate_pino_seed_metrics(per_seed: list[dict]) -> dict:
+def aggregate_pino_seed_metrics(per_seed: list[dict], horizon: int = 100) -> dict:
     """Aggregate real test metrics, locating horizon 100 by its recorded step."""
 
     one_step = [entry["metrics"]["one_step_test"] for entry in per_seed]
@@ -77,7 +77,7 @@ def aggregate_pino_seed_metrics(per_seed: list[dict]) -> dict:
     energy_drift_100 = []
     for entry in per_seed:
         rollout = entry["metrics"]["rollout"]
-        horizon_index = rollout["steps"].index(100)
+        horizon_index = rollout["steps"].index(horizon)
         mass_drift_100.append(rollout["mass_drift"][horizon_index])
         energy_drift_100.append(rollout["energy_drift"][horizon_index])
     return {
@@ -128,14 +128,16 @@ def make_plots(payload: dict, output) -> None:
         axis.grid(True, which="both", alpha=0.3)
 
     axes[0].axhline(EPS_SPLIT, color="k", ls=":", label=f"eps_split ({EPS_SPLIT:.1e})")
-    axes[0].axhline(
-        MODEL_A_ONE_STEP, color="tab:red", ls="--",
-        label=f"Phase 2-3 Model A ({MODEL_A_ONE_STEP:.2e})",
-    )
+    baseline = payload.get("reference_lines", {}).get("model_A_one_step")
+    if baseline is not None:
+        axes[0].axhline(baseline, color="tab:red", ls="--", label=f"Model A ({baseline:.2e})")
 
     for axis in axes:
         if axis.get_legend_handles_labels()[0]:
             axis.legend(fontsize=8)
+    if "selected_horizon" in payload:
+        for axis, quantity in zip(axes[1:], ("mass", "energy")):
+            axis.set_title(f"{quantity} drift @{payload['selected_horizon']}")
     figure.suptitle(
         f"Phase 7a: PINO lambda sweep  [{payload['data_hash']}]  "
         "(CN residual is itself mass-preserving -- see docstring)"
@@ -154,7 +156,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--lambdas", type=float, nargs="+", default=[0.0, 0.01, 0.1, 1.0, 10.0]
     )
-    return parser.parse_args(argv)
+    from spno.phase_workflow import add_workflow_arguments, parse_workflow_args
+    add_workflow_arguments(parser)
+    return parse_workflow_args(parser, argv)
 
 
 def run_sweep(shards, data_config: DataConfig, args, *, save=save_run) -> dict:
@@ -267,6 +271,10 @@ def run_sweep(shards, data_config: DataConfig, args, *, save=save_run) -> dict:
 
 def main(argv=None) -> dict:
     args = parse_args(argv)
+    if args.stage is not None:
+        from spno.phase_workflow import run_stage
+        return run_stage(7, args)
+
     data_config = DataConfig()
     shards = load_shards(data_config)
     return run_sweep(shards, data_config, args)

@@ -50,6 +50,23 @@ python scripts/run_phase0.py --quick   # smoke-test the reference solver end to 
 and land in a separate `-quick`-suffixed results directory so they can never be mistaken for
 real ones. Drop `--quick` (and raise `--epochs`) once you actually want numbers.
 
+## Colab notebooks: train once, evaluate repeatedly
+
+Start with [`notebooks/00_training.ipynb`](notebooks/00_training.ipynb). It imports
+Phase 6 standalone checkpoints across seeds and defaults to **no training**. Separate
+notebooks evaluate Phases 7–9, and a fifth demonstrates Dirichlet Poisson/Laplace
+problems on a rectangle and disk. See the [setup guide](notebooks/README.md).
+
+Run `python scripts/build_colab_bundle.py` to create the uploadable source bundle.
+No GitHub publication is required. Copy the existing standalone artifacts to Drive
+before closing a Colab runtime that holds them only on its temporary disk.
+
+The new explicit `--stage prepare|train|evaluate` workflow uses separate source and
+output roots, reuses compatible completed runs, and saves new training progress at
+every epoch. Evaluation never starts training. Existing CLI calls without `--stage`
+retain their historical behavior. Optional dependencies: `--extra dirichlet` for the
+FEM example and `--extra notebooks` for notebook kernels and execution tests.
+
 ## Running an experiment phase
 
 Each phase has its own runner under `scripts/`, sharing a common flag set:
