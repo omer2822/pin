@@ -230,10 +230,16 @@ def load_models(
     *,
     allow_budget_bound: bool = False,
     standalone: bool = False,
+    quick: bool | None = None,
 ) -> dict[int, dict[str, object]]:
-    """Load the Phase 2-5 family plus the Phase 6 A-wide ablation."""
+    """Load the Phase 2-5 family plus the Phase 6 A-wide ablation.
 
-    quick = allow_budget_bound
+    ``quick`` selects the ``-quick`` checkpoint paths; ``allow_budget_bound`` only
+    relaxes the convergence gate.  ``quick`` defaults to ``allow_budget_bound`` for
+    the legacy CLI, where the two always coincide.
+    """
+
+    quick = allow_budget_bound if quick is None else quick
     phase23_identifier = run_identifier(config_hash(data_config), quick=quick)
     phase45_identifier = run_identifier(
         config_hash(data_config), "one-step", f"{kinetic}L0", quick=quick
@@ -321,8 +327,9 @@ def _load_phase6_arm_models(
     *,
     allow_budget_bound: bool,
     expected_data_hash: str,
+    quick: bool | None = None,
 ):
-    quick = allow_budget_bound
+    quick = allow_budget_bound if quick is None else quick
     identifier = _phase6_identifier(data_config, kinetic, quick=quick)
     command = (
         "python scripts/train_phase6_arms.py "
@@ -767,6 +774,7 @@ def _run_g6a(
     *,
     device: str,
     quick: bool,
+    allow_budget_bound: bool | None = None,
 ) -> dict:
     models_by_seed = _load_phase6_arm_models(
         checkpoint_root,
@@ -775,8 +783,9 @@ def _run_g6a(
         kinetic,
         "G6a",
         ("C1", "C2", "C3"),
-        allow_budget_bound=quick,
+        allow_budget_bound=quick if allow_budget_bound is None else allow_budget_bound,
         expected_data_hash=multi_dt_data_hash(data_config, quick=quick),
+        quick=quick,
     )
     per_model: dict[str, dict[int, dict[str, dict]]] = {
         name: {} for name in ("C1", "C2", "C3")
@@ -886,6 +895,7 @@ def _run_g7(
     *,
     device: str,
     quick: bool,
+    allow_budget_bound: bool | None = None,
 ) -> dict:
     shard, fixed_config = _load_shift_shard(
         shift_root, spec, "test", quick=quick
@@ -897,8 +907,9 @@ def _run_g7(
         kinetic,
         "G7-alpha-fixed",
         ("A", "C1", "C2"),
-        allow_budget_bound=quick,
+        allow_budget_bound=quick if allow_budget_bound is None else allow_budget_bound,
         expected_data_hash=config_hash(fixed_config),
+        quick=quick,
     )
     varying = {
         seed: {name: models[name] for name in ("A", "C1", "C2")}
@@ -926,10 +937,17 @@ def run_selected_arms(
     shift_root: Path | None = None,
     shift_specs: dict[str, ShiftSpec] = SHIFT_SPECS,
     models_by_seed: dict[int, dict] | None = None,
+    allow_budget_bound: bool | None = None,
 ) -> dict:
-    """Execute every selected Phase 6 arm exclusively from restored checkpoints."""
+    """Execute every selected Phase 6 arm exclusively from restored checkpoints.
+
+    ``allow_budget_bound`` (default: ``quick``) admits checkpoints whose best epoch
+    was the last one; callers must label such results exploratory.
+    """
 
     selected = tuple(selected)
+    if allow_budget_bound is None:
+        allow_budget_bound = quick
     shift_root = phase6_artifact_root(quick=quick) if shift_root is None else Path(shift_root)
     base_models = models_by_seed
     if base_models is None:
@@ -938,7 +956,8 @@ def run_selected_arms(
             data_config,
             seeds,
             kinetic,
-            allow_budget_bound=quick,
+            allow_budget_bound=allow_budget_bound,
+            quick=quick,
         )
     experiments = {}
 
@@ -979,6 +998,7 @@ def run_selected_arms(
             kinetic,
             device=device,
             quick=quick,
+            allow_budget_bound=allow_budget_bound,
         )
     if "G6b" in selected:
         per_seed = [
@@ -999,6 +1019,7 @@ def run_selected_arms(
             shift_specs["G7-alpha-fixed"],
             device=device,
             quick=quick,
+            allow_budget_bound=allow_budget_bound,
         )
     if "G9" in selected:
         per_seed = [

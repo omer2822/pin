@@ -82,8 +82,13 @@ class Workflow:
         self.cache_root = Path(cache_root) if cache_root is not None else None
         self._imports = {}
         self._digest_cache = {}
-        source_paths = self._paths(self.source_root / 'data', config_hash(self.data_config))
-        self._source_fingerprints = {s: self._digest(source_paths[s]) for s in ('train', 'val')}
+        # Evaluation-only transfers omit train.pt; fingerprints stay unknown (and
+        # unrecorded) until both splits exist, so imports are never silently reused.
+        self._source_fingerprints = None
+        source_paths = shard_paths(self.source_root / 'data', config_hash(self.data_config))
+        if all(source_paths[s].is_file() for s in ('train', 'val')):
+            source_paths = self._paths(self.source_root / 'data', config_hash(self.data_config))
+            self._source_fingerprints = {s: self._digest(source_paths[s]) for s in ('train', 'val')}
         # Freeze provenance across runtime restarts, not merely within this object.
         import_id = stable_hash(sorted(r['sha256'] for r in self._inventory))
         manifest_path = self.output_root / 'imports' / f'{import_id}.json'
@@ -103,7 +108,7 @@ class Workflow:
             elif current_config is not None:
                 manifest['source_train_config'] = current_config
                 atomic_json(manifest_path, manifest)
-        else:
+        elif self._source_fingerprints is not None:
             atomic_json(manifest_path, {'data_fingerprints': self._source_fingerprints,
                                        'source_train_config': current_config})
         self.seeds = sorted({r['seed'] for r in self._inventory if r['name'] == 'A'})
@@ -112,8 +117,8 @@ class Workflow:
     def inventory(self):
         return list(self._inventory)
 
-    def _paths(self, root, identifier):
-        paths = shard_paths(Path(root), identifier)
+    def _paths(self, root, identifier, splits=('train', 'val', 'test')):
+        paths = {s: p for s, p in shard_paths(Path(root), identifier).items() if s in splits}
         for path in paths.values():
             if not path.is_file():
                 raise FileNotFoundError(f'Dataset missing: {path}; prepare this experiment first')

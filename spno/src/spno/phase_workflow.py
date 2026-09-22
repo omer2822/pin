@@ -152,8 +152,9 @@ def evaluate_phase(workflow: Workflow, phase: int, *, seeds=None, device='cpu',
         models = {seed: {} for seed in seeds}
         for row in rows:
             name = row['name']
-            if not row['converged'] and not workflow.quick:
+            if not row['converged'] and not (workflow.quick or allow_budget_bound):
                 raise RuntimeError(f'Phase 6 checkpoint is budget-bound: {row["path"]}')
+            payload['exploratory'] |= not row['converged']
             payload['checkpoint_sources'][row['sha256']] = {'path': row['path'], 'sha256': row['sha256'],
                                                            'converged': row['converged']}
             if '/' not in name:
@@ -161,14 +162,18 @@ def evaluate_phase(workflow: Workflow, phase: int, *, seeds=None, device='cpu',
                 model = runner._model_from_checkpoint(cp, workflow.data_config, expected_name=name)
                 model.load_state_dict(cp.state_dict, strict=True)
                 models[row['seed']][name] = model.eval().to(device)
-        # Some G arms generate new test shards: keep them outside the imported run.
-        shift_root = workflow.output_root / 'phase6-evaluation-data'
-        for path in (workflow.source_root / 'data').rglob('*.pt'):
-            verified_copy(path, shift_root / path.relative_to(workflow.source_root / 'data'))
+        # Quick G arms generate missing test shards: keep them outside the imported
+        # run.  Full runs only read shards, so they use the source directly.
+        shift_root = workflow.source_root / 'data'
+        if workflow.quick:
+            shift_root = workflow.output_root / 'phase6-evaluation-data'
+            for path in (workflow.source_root / 'data').rglob('*.pt'):
+                verified_copy(path, shift_root / path.relative_to(workflow.source_root / 'data'))
         payload['gates'] = runner.run_gates(workflow.data_config.domain, workflow.data_config)
         payload['experiments'] = runner.run_selected_arms(
             selected_arms, workflow.data_config, seeds=seeds, kinetic=kinetic, device=device,
-            quick=workflow.quick, checkpoint_root=workflow.source_root, shift_root=shift_root, models_by_seed=models)
+            quick=workflow.quick, checkpoint_root=workflow.source_root, shift_root=shift_root, models_by_seed=models,
+            allow_budget_bound=workflow.quick or allow_budget_bound)
         payload.update(alpha_train_range=list(workflow.data_config.alpha_range),
                        cascade_cutoff=workflow.data_config.initial_bandwidth)
     else:
@@ -176,7 +181,10 @@ def evaluate_phase(workflow: Workflow, phase: int, *, seeds=None, device='cpu',
     payload['identifier'] = f'phase{phase}-' + stable_hash({
         'settings': settings, 'checkpoints': payload['checkpoint_sources'],
         'evaluation_datasets': payload['evaluation_datasets'],
-        'test': workflow._digest(workflow._paths(workflow.source_root / 'data', config_hash(workflow.data_config))['test'])})
+        'test': workflow._digest(workflow._paths(workflow.source_root / 'data', config_hash(workflow.data_config),
+                                                 splits=('test',))['test'])})
+    if payload['exploratory'] and not workflow.quick:
+        payload['identifier'] += '-budget-bound'  # never mistaken for converged results
     output = workflow.output_root / 'reports' / payload['identifier']
     (output / 'plots').mkdir(parents=True, exist_ok=True)
     atomic_json(output / 'metrics.json', payload)
@@ -194,7 +202,7 @@ def add_workflow_arguments(parser):
     parser.add_argument('--source-config', type=Path,
                         help='JSON with original data and train configurations; missing training settings remain unknown')
     parser.add_argument('--train-config', type=Path, help='JSON overrides for the requested training protocol (never redefines the source)')
-    parser.add_argument('--allow-budget-bound', action='store_true', help='exploratory evaluation only (phases 7–9)')
+    parser.add_argument('--allow-budget-bound', action='store_true', help='admit budget-bound checkpoints; results are labelled exploratory')
 
 
 def parse_workflow_args(parser, argv=None):

@@ -3,6 +3,7 @@
 | Notebook | Purpose |
 |---|---|
 | [00_training.ipynb](00_training.ipynb) | Discover Phase 6 artifacts; prepare, train, and resume explicitly selected experiments |
+| [06_phase6_evaluation.ipynb](06_phase6_evaluation.ipynb) | Evaluate every Phase 6 arm from the transferred Windows checkpoints; self-contained (clones `master`, extracts the eval-only archive from Drive, saves each arm to Drive) |
 | [07_pino_evaluation.ipynb](07_pino_evaluation.ipynb) | Evaluate the PINO sweep using saved checkpoints |
 | [08_resolution_robustness.ipynb](08_resolution_robustness.ipynb) | Evaluate resolution, noise robustness, and sample efficiency |
 | [09_misspecification.ipynb](09_misspecification.ipynb) | Evaluate equation misspecification sweeps with a shared zero-perturbation baseline |
@@ -38,9 +39,10 @@
    the experiment you need to prepare in the training notebook.
 
 An existing model that has not converged is retained rather than automatically
-retrained. Research evaluation rejects it by default. In Phases 7–9,
-`ALLOW_BUDGET_BOUND=True` enables evaluation explicitly marked as exploratory.
-Phase 6 retains its original convergence gate. A `quick` run is always a plumbing
+retrained. Research evaluation rejects it by default. `ALLOW_BUDGET_BOUND=True`
+(or `--allow-budget-bound`) enables evaluation explicitly marked as exploratory; for
+Phase 6 the report identifier also gains a `-budget-bound` suffix. Saved convergence
+metadata is never modified. A `quick` run is always a plumbing
 check, not a research result.
 
 ## Experiment identity and recovery

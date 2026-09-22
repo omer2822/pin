@@ -279,3 +279,54 @@ def test_reopening_catalog_does_not_relabel_changed_validation_data(standalone, 
     shard.save(path)
     reopened = Workflow(root, tmp_path / 'new', data_config=data, train_config=config)
     assert reopened.status(reopened.prepare(7, seeds=[3], lambdas=[0.0]))[0]['status'] == 'missing'
+
+
+@pytest.fixture
+def budget_bound_standalone(tmp_path_factory):
+    """A tiny non-quick standalone run: one epoch, so every checkpoint is budget-bound,
+    shipped without its train.pt shards like the eval-only transfer archive."""
+    from scripts.train_phase6_arms import train_phase6_arms
+    from spno.data.shift import ShiftSpec
+    tmp_path = tmp_path_factory.mktemp('budget')
+    data = replace(DataConfig(), n_train=2, n_val=2, n_test=2, steps=2)
+    fixed = ShiftSpec('G7-alpha-fixed', replace(data, alpha_range=(.9, .9), seed=120))
+    source = tmp_path / 'phase6-standalone-artifacts'
+    train_phase6_arms(data, seeds=[0], epochs=1, device='cpu', kinetic='K0', quick=False,
+                      standalone=True, data_root=source / 'data', checkpoint_root=source,
+                      artifact_root=source / 'data', shift_specs={'G7-alpha-fixed': fixed})
+    for path in (source / 'data').rglob('train.pt'):
+        path.unlink()
+    return source, data, fixed
+
+
+def _snapshot(root):
+    return {p: p.read_bytes() for p in root.rglob('*.pt')}
+
+
+def test_phase6_budget_bound_evaluation_is_opt_in_and_labelled(budget_bound_standalone, tmp_path, monkeypatch):
+    from spno.workflow import Workflow
+    from spno.phase_workflow import evaluate_phase
+    source, data, _ = budget_bound_standalone
+    before = _snapshot(source)
+    monkeypatch.setattr(torch.optim.AdamW, 'step', lambda *_: pytest.fail('phase6 retrained'))
+    workflow = Workflow(source, tmp_path / 'out', data_config=data,
+                        train_config=TrainConfig(epochs=1, batch_size=256, patience=8))
+    assert not workflow.quick
+    with pytest.raises(RuntimeError, match='budget-bound'):
+        evaluate_phase(workflow, 6, arms=['G5a'])
+    result = evaluate_phase(workflow, 6, arms=['G6a'], allow_budget_bound=True)
+    assert set(result['experiments']['G6a']['by_model']) == {'C1', 'C2', 'C3'}
+    assert result['exploratory'] is True
+    assert result['identifier'].endswith('-budget-bound')
+    assert all(not s['converged'] for s in result['checkpoint_sources'].values())
+    assert not (tmp_path / 'out' / 'phase6-evaluation-data').exists()
+    assert _snapshot(source) == before
+
+
+def test_phase6_g7_restores_budget_bound_arm_outside_quick_paths(budget_bound_standalone):
+    from scripts.run_phase6 import _run_g7, load_models
+    source, data, fixed = budget_bound_standalone
+    base = load_models(source, data, [0], 'K0', allow_budget_bound=True, standalone=True, quick=False)
+    result = _run_g7(base, source, source / 'data', data, [0], 'K0', fixed,
+                     device='cpu', quick=False, allow_budget_bound=True)
+    assert set(result['fixed_alpha']['banded']) == {'A', 'C1', 'C2'}
