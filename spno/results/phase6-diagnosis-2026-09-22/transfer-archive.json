@@ -1,0 +1,10 @@
+{
+  "filename": "phase6-standalone-artifacts-bd4e108527-K0.zip",
+  "bytes": 1325029712,
+  "sha256": "01fd894349dc36dd90386d877693e51bbe3d2d28e98609ccefdf02608a0a0812",
+  "member_count": 62,
+  "verified_all_member_sha256": true,
+  "contents": "36 checkpoints and 26 dataset files under spno/results/phase6-standalone-artifacts/",
+  "transfer": "Copy this ZIP and its .sha256 sidecar from Windows to the Mac. They are not uploaded by this task.",
+  "compression": "ZIP_STORED; uncompressed to avoid extra CPU work"
+}
