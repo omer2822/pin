@@ -527,7 +527,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--gammas", type=float, nargs="+", default=[0.0, 1e-4, 1e-3, 1e-2]
     )
-    return parser.parse_args(argv)
+    from spno.phase_workflow import add_workflow_arguments, parse_workflow_args
+    add_workflow_arguments(parser)
+    return parse_workflow_args(parser, argv)
 
 
 def run_dial_measurement(
@@ -743,6 +745,10 @@ def run_sweep(
 
 def main(argv=None) -> dict:
     args = parse_args(argv)
+    if args.stage is not None:
+        from spno.phase_workflow import run_stage
+        return run_stage(9, args)
+
     data_config = quick_data_config() if args.quick else DataConfig()
     return run_sweep(data_config, args)
 

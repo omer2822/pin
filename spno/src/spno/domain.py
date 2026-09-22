@@ -353,9 +353,13 @@ def spatial_broadcast(values: Tensor, domain: PeriodicDomain) -> Tensor:
     rank-inflated result that broadcasts to ``(batch, *shape, *shape)``.
     """
 
+    # Guard against accidentally treating a leading batch/frame axis as a spatial
+    # axis when its length happens to equal a grid size (common in small tests).
+    # A genuine spatial tail must occupy at least `domain.dim` axes *and* leave
+    # at least one leading axis (the per-sample axes); require ndim >= dim + 1.
     if (
         math.prod(domain.shape) > 1
-        and values.ndim >= domain.dim
+        and values.ndim >= domain.dim + 1
         and tuple(values.shape[-domain.dim :]) == domain.shape
     ):
         raise ValueError(
