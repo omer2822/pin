@@ -5,9 +5,12 @@ from dataclasses import asdict, replace
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
+import stat
+import tempfile
 import uuid
+import zipfile
 
 from .checkpoints import load_checkpoint_payload
 from .config import DataConfig, config_hash
@@ -72,6 +75,84 @@ def copy_standalone(source: Path, destination: Path) -> Path:
         for path in source.parent.glob(pattern):
             verified_copy(path, destination / 'reports' / path.parent.name / path.name)
     return destination
+
+
+def resolve_standalone_source(source=None, *, search_roots=(), extraction_root=None) -> Path:
+    """Locate a full Phase 6 transfer, accepting an extracted parent or a ZIP.
+
+    Explicit selections never fall back to unrelated runs. Automatic discovery
+    prefers complete folders, rejects ambiguity, then looks for full-transfer ZIPs.
+    This only locates/copies artifacts; it never generates data or trains models.
+    """
+    roots = [Path(source)] if source is not None else [Path(p) for p in search_roots]
+    candidates = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        checkpoint_dirs = list(root.rglob('checkpoints/phase6'))
+        if root.name == 'phase6' and root.parent.name == 'checkpoints':
+            checkpoint_dirs.append(root)
+        for path in checkpoint_dirs:
+            if any(path.rglob('*.pt')):
+                candidates.add(path.parent.parent.resolve())
+    complete = []
+    incomplete = []
+    for root in sorted(candidates):
+        datasets = list((root / 'data').glob('*'))
+        if any(all((dataset / f'{split}.pt').is_file() for split in ('train', 'val', 'test'))
+               for dataset in datasets if dataset.is_dir()):
+            complete.append(root)
+        else:
+            incomplete.append(root)
+    if len(complete) > 1:
+        raise ValueError('Multiple complete Phase 6 runs found; set SOURCE_ROOT explicitly:\n'
+                         + '\n'.join(map(str, complete)))
+    if complete:
+        return complete[0]
+
+    archives = set()
+    for root in roots:
+        if root.is_file() and root.suffix.lower() == '.zip':
+            archives.add(root.resolve())
+        elif root.is_dir():
+            archives.update(p.resolve() for p in root.rglob('phase6-standalone-artifacts*.zip'))
+    if len(archives) > 1:
+        raise ValueError('Multiple full Phase 6 archives found; set SOURCE_ROOT to one ZIP:\n'
+                         + '\n'.join(map(str, sorted(archives))))
+    if archives:
+        archive = next(iter(archives))
+        if extraction_root is None:
+            raise ValueError('Set extraction_root to a writable local directory to unpack the Phase 6 ZIP')
+        destination = Path(extraction_root) / file_digest(archive)[:16]
+        with zipfile.ZipFile(archive) as handle:
+            for member in handle.infolist():
+                path = PurePosixPath(member.filename)
+                if (path.is_absolute() or '..' in path.parts or '\\' in member.filename
+                        or stat.S_ISLNK(member.external_attr >> 16)):
+                    raise ValueError(f'Unsafe archive member: {member.filename}')
+            if not destination.exists():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                temporary = Path(tempfile.mkdtemp(prefix='phase6-', dir=destination.parent))
+                try:
+                    handle.extractall(temporary)
+                    # Validate layout and split availability before publishing it.
+                    resolve_standalone_source(temporary)
+                    temporary.rename(destination)
+                finally:
+                    if temporary.exists():
+                        shutil.rmtree(temporary)
+        return resolve_standalone_source(destination)
+    if incomplete:
+        raise FileNotFoundError(
+            'Phase 6 checkpoints found, but no complete train.pt / val.pt / test.pt dataset. '
+            'The evaluation-only transfer is insufficient for the Phase 7 workflow. '
+            'Use the full phase6-standalone-artifacts-*.zip or the original full artifact folder.\n'
+            + '\n'.join(map(str, incomplete)))
+    searched = ', '.join(map(str, roots)) or '(no search locations)'
+    raise FileNotFoundError(
+        f'No Phase 6 artifacts found in {searched}. Set SOURCE_ROOT to a folder containing '
+        'checkpoints/phase6 and data, or to the full phase6-standalone-artifacts-*.zip. '
+        'The source-code ZIP contains no trained weights; an evaluation-only ZIP omits train.pt.')
 
 
 def inspect_standalone(root: Path, data_config=None, train_config=None):

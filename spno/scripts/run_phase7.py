@@ -16,6 +16,9 @@ Usage:
     python scripts/run_phase7.py [--quick] [--seeds 0 1 2] [--epochs 60]
                                  [--device auto] [--lambdas 0.0 0.01 0.1 1 10]
 
+The explicit --stage workflow evaluates A, A+PDE, B-loop, C1 and C1+PDE.
+The legacy invocation without --stage retains the A-only sweep.
+
 Nothing is trained here without an explicit run; the deferred Phase 2-5 convergence debt
 must be cleared first or every row describes the epoch cap rather than the model.
 """
@@ -23,6 +26,9 @@ must be cleared first or every row describes the epoch cap rather than the model
 from __future__ import annotations
 
 import argparse
+import csv
+import math
+import statistics
 
 import matplotlib
 import torch
@@ -70,28 +76,108 @@ def build_pino_model(
 
 
 def aggregate_pino_seed_metrics(per_seed: list[dict], horizon: int = 100) -> dict:
-    """Aggregate real test metrics, locating horizon 100 by its recorded step."""
+    """Aggregate test metrics at the recorded horizon, with spread across seeds."""
 
-    one_step = [entry["metrics"]["one_step_test"] for entry in per_seed]
-    mass_drift_100 = []
-    energy_drift_100 = []
+    if not per_seed:
+        raise ValueError("At least one seed is required for the PINO comparison")
+    values = {"one_step": [], "rollout": [], "mass_drift": [], "energy_drift": []}
     for entry in per_seed:
-        rollout = entry["metrics"]["rollout"]
-        horizon_index = rollout["steps"].index(horizon)
-        mass_drift_100.append(rollout["mass_drift"][horizon_index])
-        energy_drift_100.append(rollout["energy_drift"][horizon_index])
-    return {
-        "one_step_mean": sum(one_step) / len(one_step),
-        "one_step_min": min(one_step),
-        "one_step_max": max(one_step),
-        "mass_drift_100_mean": sum(mass_drift_100) / len(mass_drift_100),
-        "energy_drift_100_mean": sum(energy_drift_100) / len(energy_drift_100),
-        "converged": [entry["converged"] for entry in per_seed],
-    }
+        metrics = entry["metrics"]
+        rollout = metrics["rollout"]
+        if horizon not in rollout["steps"]:
+            raise RuntimeError(f"Rollout did not reach step {horizon}; inspect per-seed divergence")
+        index = rollout["steps"].index(horizon)
+        values["one_step"].append(metrics["one_step_test"])
+        for key, source in (("rollout", "relative_error"), ("mass_drift", "mass_drift"),
+                            ("energy_drift", "energy_drift")):
+            values[key].append(rollout[source][index])
+    result = {"selected_horizon": horizon, "seed_count": len(per_seed),
+              "converged": [entry["converged"] for entry in per_seed]}
+    for key, series in values.items():
+        if any(not math.isfinite(v) or v < 0 for v in series):
+            raise RuntimeError(f"Invalid {key} metrics; cannot publish an incomplete comparison")
+        result.update({f"{key}_mean": statistics.mean(series),
+                       f"{key}_std": statistics.stdev(series) if len(series) > 1 else 0.,
+                       f"{key}_min": min(series), f"{key}_max": max(series)})
+    # Preserve historical keys only when they really describe horizon 100.
+    if horizon == 100:
+        result["mass_drift_100_mean"] = result["mass_drift_mean"]
+        result["energy_drift_100_mean"] = result["energy_drift_mean"]
+    return result
+
+
+def make_comparison_plots(payload: dict, output) -> None:
+    """Display both full sweeps, the projection baseline, and a reusable CSV table."""
+
+    horizon = payload["selected_horizon"]
+    panels = (("one_step", "One-step relative L2"),
+              ("rollout", f"Rollout relative L2 @{horizon}"),
+              ("mass_drift", f"Mass drift @{horizon}"),
+              ("energy_drift", f"Energy drift @{horizon}"))
+    figure, axes = plt.subplots(2, 2, figsize=(13, 9))
+    rows = []
+    for name, sweep in payload["sweeps"].items():
+        weights = sorted(float(w) for w in sweep)
+        for weight in weights:
+            entry = sweep[str(weight)]
+            rows.append({"arm": name if weight == 0 else f"{name}+PDE",
+                         "lambda": weight, "selected_horizon": horizon,
+                         "seed_count": entry["seed_count"], "parameters": entry["parameter_count"],
+                         "converged_seeds": sum(entry["converged"]),
+                         **{f"{key}_{stat}": entry[f"{key}_{stat}"]
+                            for key, _ in panels for stat in ("mean", "std")}})
+        for axis, (key, title) in zip(axes.flat, panels):
+            means = [sweep[str(w)][f"{key}_mean"] for w in weights]
+            stds = [sweep[str(w)][f"{key}_std"] for w in weights]
+            line, = axis.plot(weights, means, marker="o", label=f"{name} / {name}+PDE")
+            axis.fill_between(weights, [max(0., m-s) for m, s in zip(means, stds)],
+                              [m+s for m, s in zip(means, stds)], color=line.get_color(), alpha=.12)
+    baseline = payload["baselines"]["B-loop"]
+    rows.append({"arm": "B-loop", "lambda": 0., "selected_horizon": horizon,
+                 "seed_count": baseline["seed_count"], "parameters": baseline["parameter_count"],
+                 "converged_seeds": sum(baseline["converged"]),
+                 **{f"{key}_{stat}": baseline[f"{key}_{stat}"]
+                    for key, _ in panels for stat in ("mean", "std")}})
+    positive = [w for w in weights if w > 0]
+    for axis, (key, title) in zip(axes.flat, panels):
+        mean, std = baseline[f"{key}_mean"], baseline[f"{key}_std"]
+        axis.axhline(mean, color="tab:green", ls="--", label="B-loop (projection)")
+        axis.axhspan(max(0., mean-std), mean+std, color="tab:green", alpha=.08)
+        axis.set_xscale("symlog", linthresh=min(positive)/2 if positive else .01)
+        axis.set_xticks(weights, [f"{w:g}" for w in weights])
+        values = [entry[f"{key}_mean"] for sweep in payload["sweeps"].values() for entry in sweep.values()]
+        positive_values = [v for v in values + [mean] if v > 0]
+        upper = max(row[f"{key}_mean"] + row[f"{key}_std"] for row in rows)
+        # Keep zero visible without adding meaningless negative-error decades or
+        # stretching an accuracy panel all the way to machine precision.
+        axis.set_yscale("symlog", linthresh=min(positive_values)/10 if positive_values else 1e-15)
+        axis.set_ylim(0., upper * 1.5 if upper else 1e-15)
+        axis.set_xlabel("PDE weight lambda (0 = no residual)")
+        axis.set_title(title)
+        axis.grid(True, which="both", alpha=.3)
+        axis.legend(fontsize=8)
+    status = "EXPLORATORY" if payload["exploratory"] else "converged checkpoints"
+    if not payload["comparison_complete"]:
+        status += "; controls only — no positive lambda"
+    figure.suptitle(f"Phase 7a: soft physics, projection, and structured architecture — {status}")
+    figure.text(.5, .015, "Mean ± sample SD across seeds (one seed has no spread estimate). "
+                "CN conserves mass at zero residual; finite-dt CN and C1 split-step dynamics differ.",
+                ha="center", fontsize=9)
+    figure.tight_layout(rect=(0, .04, 1, .95))
+    figure.savefig(output / "plots" / "phase7_lambda_sweep.png", dpi=150)
+    plt.close(figure)
+    with (output / "comparison.csv").open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def make_plots(payload: dict, output) -> None:
     """One figure: error, mass drift and energy drift against lambda on a log axis."""
+
+    if "sweeps" in payload:
+        make_comparison_plots(payload, output)
+        return
 
     sweep = payload["sweep"]
     lambdas = sorted(float(key) for key in sweep)

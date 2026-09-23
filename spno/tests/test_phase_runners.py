@@ -644,6 +644,7 @@ def test_phase7_aggregates_test_and_horizon_100_metrics():
                 # Step 100 is deliberately not at a fixed offset.
                 "rollout": {
                     "steps": [100, 1],
+                    "relative_error": [0.5, 0.2],
                     "mass_drift": [0.03, 0.01],
                     "energy_drift": [0.04, 0.02],
                 },
@@ -655,6 +656,7 @@ def test_phase7_aggregates_test_and_horizon_100_metrics():
                 "one_step_test": 0.4,
                 "rollout": {
                     "steps": [1, 100],
+                    "relative_error": [0.4, 0.7],
                     "mass_drift": [0.02, 0.05],
                     "energy_drift": [0.03, 0.06],
                 },
@@ -670,6 +672,9 @@ def test_phase7_aggregates_test_and_horizon_100_metrics():
     assert result["mass_drift_100_mean"] == pytest.approx(0.04)
     assert result["energy_drift_100_mean"] == pytest.approx(0.05)
     assert result["converged"] == [True, False]
+    assert result["rollout_mean"] == pytest.approx(0.6)
+    assert result["rollout_std"] == pytest.approx(0.1414213562373095)
+    assert result["selected_horizon"] == 100
 
 
 def test_phase7_model_factory_is_deterministic_for_a_seed():

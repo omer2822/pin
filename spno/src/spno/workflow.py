@@ -188,11 +188,20 @@ class Workflow:
         base = self._paths(self.source_root / 'data', config_hash(self.data_config))
         jobs = []
         if phase == 7:
-            for weight in lambdas:
-                if not math.isfinite(weight) or weight < 0:
-                    raise ValueError('PINO lambda must be finite and nonnegative')
-                for seed in seeds:
-                    jobs.append(self._job('A', seed, base, config_hash(self.data_config), config, float(weight)))
+            weights = list(dict.fromkeys(float(weight) for weight in lambdas))
+            if not weights or any(not math.isfinite(w) or w < 0 for w in weights):
+                raise ValueError('Select at least one finite, nonnegative PINO lambda')
+            # Every sweep includes its matched no-residual control, even when the
+            # caller selects only positive weights. B is one projection baseline.
+            if 0.0 not in weights:
+                weights.append(0.0)
+            for name in ('A', 'C1', 'B-loop'):
+                for weight in (weights if name != 'B-loop' else [0.0]):
+                    for seed in seeds:
+                        source = self._base_row(name, seed)
+                        kinetic = source['metadata']['architecture'].get('kinetic_mode', 'K0') if source else 'K0'
+                        jobs.append(self._job(name, seed, base, config_hash(self.data_config),
+                                              config, weight, kinetic=kinetic))
         elif phase == 8:
             shard = TrajectoryShard.load(base['train'])
             pairs = shard.n_trajectories * (shard.n_frames - 1)
@@ -256,7 +265,8 @@ class Workflow:
                 rows.append({'id': job.identifier, 'name': job.name, 'seed': job.seed,
                              'status': status, 'converged': record['converged'] if record else None,
                              'source': record['source'] if record else None,
-                             'objective': job.spec['objective'], 'train': job.spec['train']})
+                             'objective': job.spec['objective'], 'physics_weight': job.physics_weight,
+                             'train': job.spec['train']})
             except (RuntimeError, OSError, ValueError, KeyError) as error:
                 rows.append({'id': job.identifier, 'name': job.name, 'seed': job.seed,
                              'status': 'incompatible', 'error': str(error)})

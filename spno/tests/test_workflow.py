@@ -52,7 +52,7 @@ def test_import_reuses_all_seeds_and_zero_controls_without_training(standalone, 
     for job in jobs:
         model, record = workflow.restore(job)
         assert all(torch.equal(v, model.state_dict()[k])
-                   for k, v in originals['A', job.seed].state_dict().items())
+                   for k, v in originals[job.name, job.seed].state_dict().items())
         assert record['source'] == 'phase6'
     full = workflow.prepare(8, seeds=[3], fractions=[1.0])
     zero9 = workflow.prepare(9, seeds=[3], sigmas=[0.0], gammas=[0.0])
@@ -115,6 +115,74 @@ def test_phase7_missing_checkpoint_fails_without_starting_training(standalone, t
     monkeypatch.setattr(torch.optim.AdamW, 'step', lambda *_: pytest.fail('training from evaluation'))
     with pytest.raises(RuntimeError, match='missing'):
         evaluate_phase(workflow, 7, seeds=[3], lambdas=[0.01])
+
+
+def test_phase7_catalog_includes_paired_c1_sweep_and_single_projection_baseline(standalone, tmp_path):
+    from spno.workflow import Workflow
+    root, data, config, _ = standalone
+    workflow = Workflow(root, tmp_path / 'new', data_config=data, train_config=config)
+    jobs = workflow.prepare(7, seeds=[3, 5], lambdas=[0.01, 0.1])
+    for seed in (3, 5):
+        assert {(j.name, j.physics_weight) for j in jobs if j.seed == seed} == {
+            ('A', 0.), ('A', .01), ('A', .1),
+            ('C1', 0.), ('C1', .01), ('C1', .1), ('B-loop', 0.)}
+    controls = [j for j in jobs if j.physics_weight == 0]
+    assert all(row['source'] == 'phase6' for row in workflow.status(controls))
+    assert all(j.spec['train'] == jobs[0].spec['train'] for j in jobs if j.seed == 3)
+    assert len({j.identifier for j in jobs}) == 14
+
+
+@pytest.mark.parametrize('weights', [[], [-1.], [float('nan')], [float('inf')]])
+def test_phase7_rejects_invalid_sweeps(standalone, tmp_path, weights):
+    from spno.workflow import Workflow
+    root, data, config, _ = standalone
+    workflow = Workflow(root, tmp_path / 'new', data_config=data, train_config=config)
+    with pytest.raises(ValueError, match='lambda'):
+        workflow.prepare(7, seeds=[3], lambdas=weights)
+
+
+def test_phase7_requires_c1_pde_before_any_measurement(standalone, tmp_path, monkeypatch):
+    from spno.workflow import Workflow
+    from spno.phase_workflow import evaluate_phase
+    root, data, config, _ = standalone
+    workflow = Workflow(root, tmp_path / 'new', data_config=data, train_config=config)
+    jobs = workflow.prepare(7, seeds=[3], lambdas=[0., .01])
+    workflow.train([j for j in jobs if j.name == 'A'])
+    monkeypatch.setattr(torch.optim.AdamW, 'step', lambda *_: pytest.fail('implicit training'))
+    monkeypatch.setattr(workflow, 'evaluate', lambda *_ , **kw: pytest.fail('measured incomplete comparison'))
+    with pytest.raises(RuntimeError, match='Checkpoint missing for C1'):
+        evaluate_phase(workflow, 7, seeds=[3], lambdas=[0., .01], allow_budget_bound=True)
+
+
+def test_phase7_reports_all_five_arms_with_real_trained_c1(standalone, tmp_path, monkeypatch):
+    import math
+    from pathlib import Path
+    from spno.workflow import Workflow
+    from spno.phase_workflow import evaluate_phase
+    root, data, config, _ = standalone
+    workflow = Workflow(root, tmp_path / 'new', data_config=data, train_config=config)
+    before = _snapshot(root)
+    jobs = workflow.prepare(7, seeds=[3], lambdas=[.01])
+    workflow.train(jobs)
+    monkeypatch.setattr(torch.optim.AdamW, 'step', lambda *_: pytest.fail('evaluation trained'))
+    result = evaluate_phase(workflow, 7, seeds=[3], lambdas=[.01], allow_budget_bound=True)
+    assert set(result['baselines']) == {'A', 'B-loop', 'C1'}
+    assert set(result['sweeps']) == {'A', 'C1'}
+    assert len(result['checkpoint_sources']) == 5
+    for name in ('A', 'C1'):
+        assert set(result['sweeps'][name]) == {'0.0', '0.01'}
+        row = result['sweeps'][name]['0.01']
+        assert row['selected_horizon'] == 2
+        for key in ('one_step_mean', 'rollout_mean', 'mass_drift_mean', 'energy_drift_mean'):
+            assert math.isfinite(row[key])
+        assert row['per_seed'][0]['metrics']['rollout_precision'] == 'float64/cpu'
+    assert result['sweeps']['C1']['0.01']['mass_drift_mean'] < 1e-12
+    assert result['baselines']['B-loop']['mass_drift_mean'] < 1e-12
+    assert result['exploratory'] is True
+    output = Path(result['output'])
+    assert (output / 'comparison.csv').is_file()
+    assert (output / 'plots' / 'phase7_lambda_sweep.png').is_file()
+    assert _snapshot(root) == before
 
 
 def test_training_data_change_does_not_relabel_old_weights(standalone, tmp_path):
@@ -229,6 +297,11 @@ def test_phase8_uses_source_kinetics_while_phase9_requests_k0(standalone, tmp_pa
     workflow = Workflow(root, tmp_path / 'new', data_config=data, train_config=config)
     jobs = workflow.prepare(8, seeds=[3], fractions=[1.0])
     assert all(row['status'] == 'ready' for row in workflow.status(jobs))
+    jobs7 = workflow.prepare(7, seeds=[3], lambdas=[0., .1])
+    c1_jobs = [j for j in jobs7 if j.name == 'C1']
+    assert len(c1_jobs) == 2
+    assert all(j.spec['architecture']['kinetic_mode'] == 'K1' for j in c1_jobs)
+    assert workflow.status([j for j in c1_jobs if j.physics_weight == 0])[0]['source'] == 'phase6'
     jobs9 = workflow.prepare(9, seeds=[3], sigmas=[0.0], gammas=[])
     c1 = next(j for j in jobs9 if j.name == 'C1')
     assert c1.spec['architecture']['kinetic_mode'] == 'K0'

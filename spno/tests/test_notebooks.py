@@ -20,14 +20,24 @@ def test_notebook_executes_end_to_end_without_training(filename, standalone, tmp
     assert path.is_file(), f'Missing deliverable: {filename}'
     source_config = tmp_path / 'source.json'
     source_config.write_text(json.dumps({'data': asdict(data), 'train': asdict(config)}))
+    if filename == '07_pino_evaluation.ipynb':
+        from spno.workflow import Workflow
+        workflow = Workflow(root, tmp_path / 'output', data_config=data, train_config=config)
+        workflow.train(workflow.prepare(7, seeds=[3], lambdas=[0., .01]))
     for name, value in {
         'IPYTHONDIR': str(tmp_path / 'ipython'), 'JUPYTER_RUNTIME_DIR': str(tmp_path / 'jupyter'),
         'SPNO_PROJECT_ROOT': str(project), 'SPNO_SOURCE_ROOT': str(root),
         'SPNO_OUTPUT_ROOT': str(tmp_path / 'output'), 'SPNO_SOURCE_CONFIG': str(source_config),
-        'SPNO_OPTIONS': json.dumps({'seeds': [3], 'lambdas': [0.0], 'fractions': [1.0],
+        'SPNO_OPTIONS': json.dumps({'seeds': [3], 'lambdas': [0.0, .01] if filename == '07_pino_evaluation.ipynb' else [0.0],
+                                   'allow_budget_bound': True, 'fractions': [1.0],
+                                   'source_search_roots': [str(root.parent)],
                                    'sigmas': [0.0], 'gammas': [0.0], 'grid': 16, 'noise': [0.0],
                                    'refinements': [3, 6]})}.items():
         monkeypatch.setenv(name, value)
+    if filename == '07_pino_evaluation.ipynb':
+        # Reproduce a fresh Colab runtime: artifacts exist under a transferred
+        # directory, but the assumed MyDrive/spno path has never been created.
+        monkeypatch.delenv('SPNO_SOURCE_ROOT')
     notebook = nbformat.read(path, as_version=4)
     # Execute every shipped cell, with an optimizer guard inside the actual kernel.
     notebook.cells.insert(0, nbformat.v4.new_code_cell(
@@ -38,6 +48,15 @@ def test_notebook_executes_end_to_end_without_training(filename, standalone, tmp
                               resources={'metadata': {'path': str(project)}}).execute()
     assert not any(output.output_type == 'error' for cell in executed.cells
                    if cell.cell_type == 'code' for output in cell.outputs)
+    if filename == '07_pino_evaluation.ipynb':
+        import csv
+        report = next((tmp_path / 'output' / 'reports').glob('*/comparison.csv'))
+        with report.open() as handle:
+            rows = list(csv.DictReader(handle))
+        assert {row['arm'] for row in rows} == {'A', 'A+PDE', 'B-loop', 'C1', 'C1+PDE'}
+        html = ''.join(o.get('data', {}).get('text/html', '') for c in executed.cells
+                       if c.cell_type == 'code' for o in c.outputs)
+        assert all(label in html for label in ('A+PDE', 'B-loop', 'C1+PDE'))
 
 
 def test_phase6_evaluation_notebook_runs_arms_incrementally(budget_bound_standalone, tmp_path, monkeypatch):

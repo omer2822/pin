@@ -62,24 +62,36 @@ def evaluate_phase(workflow: Workflow, phase: int, *, seeds=None, device='cpu',
         # Preflight the entire selection before any expensive evaluation.
         for job in jobs:
             restore(job)
-        payload['sweep'] = {}
-        for weight in lambdas:
-            selected = [j for j in jobs if j.physics_weight == weight]
+        def summarize(selected):
             per_seed = []
             for job in selected:
                 metrics = measure(job)
                 per_seed.append({'seed': job.seed, 'metrics': metrics,
                                  'history': metrics['history'], 'converged': metrics['converged'],
                                  'config': {'data': asdict(job.data_config), 'train': asdict(job.train_config)}})
-            if not per_seed:
-                raise ValueError('Select at least one lambda')
-            payload['sweep'][str(float(weight))] = {
-                'physics_weight': weight, 'per_seed': per_seed,
+            return {
+                'physics_weight': selected[0].physics_weight, 'per_seed': per_seed,
                 'parameter_count': per_seed[0]['metrics']['parameters'],
                 **runner.aggregate_pino_seed_metrics(per_seed, horizon=horizon)}
-        payload['reference_lines'] = {'model_A_one_step': payload['sweep'].get('0.0', {}).get('one_step_mean')}
-        payload['confound'] = 'The Crank–Nicolson residual is itself discretely mass-preserving; report the entire lambda sweep.'
-        payload['control_arm'] = 'lambda=0 reuses Model A only when data, initialization architecture and training protocol match.'
+        weights = sorted({job.physics_weight for job in jobs})
+        payload['sweeps'] = {
+            name: {str(weight): summarize([j for j in jobs if j.name == name and j.physics_weight == weight])
+                   for weight in weights}
+            for name in ('A', 'C1')}
+        payload['baselines'] = {name: payload['sweeps'][name]['0.0'] for name in ('A', 'C1')}
+        payload['baselines']['B-loop'] = summarize([j for j in jobs if j.name == 'B-loop'])
+        payload['sweep'] = payload['sweeps']['A']  # historical A-only report consumers
+        payload['variant'] = '7a-A-PINO-B-loop-C1-C1-PDE'
+        payload['reference_lines'] = {'model_A_one_step': payload['baselines']['A']['one_step_mean']}
+        payload['confound'] = (
+            'The Crank–Nicolson residual conserves mass when solved exactly; a soft penalty '
+            'does not guarantee exact conservation. Its finite-step dynamics differ from '
+            'C1 split-step dynamics and the reference solver. Report both complete lambda sweeps.')
+        payload['control_arm'] = (
+            'A and C1 lambda=0 and B-loop reuse checkpoints only when data, architecture '
+            'and training protocol match. Positive weights start from the same per-family '
+            'seed initialization, not from fitted baseline weights. B-loop has no PDE penalty.')
+        payload['comparison_complete'] = any(weight > 0 for weight in weights)
     elif phase == 8:
         from scripts import run_phase8 as runner
         config = replace(train_config or workflow.train_config or TrainConfig(), device=device)

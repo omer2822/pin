@@ -224,6 +224,17 @@ itself nearly mass-preserving, so 7a's physics loss smuggles in the very invaria
 study. This is exactly the kind of thing the physics-loss / projection / architecture
 distinction exists to expose.
 
+**Expanded Phase 7a comparison (September 2026):** retain `A, A+PDE, B-loop,
+C1, C1+PDE`. B-loop is one baseline trained with hard mass projection; do not add a
+projection-variant sweep. Apply the same lambda sweep, including zero, to A and C1
+with matched data, seeds and training protocols. Preserve C1's source kinetic/local
+architecture and pair initialization within each family. Reuse compatible baseline
+checkpoints; train positive weights from seeded initialization. Report one-step and
+rollout errors, mass and energy drift at a common recorded horizon, all lambdas,
+per-seed outcomes, parameter counts and convergence. The CN residual and C1's split
+step have different finite-step dynamics; a stronger residual can introduce bias.
+This tests whether a soft physics loss adds value beyond C1's built-in structure.
+
 **7b (optional):** true space-time PINO — FNO over (x,t) on a slab, Fourier
 differentiation in t. Only if 7a is sound. Keep 7a as the protocol-comparable variant;
 7b changes rollout semantics from step to block.
