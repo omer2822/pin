@@ -255,11 +255,20 @@ def make_probe_plots(payload: dict, output) -> None:
 
     floor = 1e-17  # exact conservation has no log; draw it at the floor
     status = "EXPLORATORY" if payload["exploratory"] else "converged checkpoints"
-    colours = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     arms = payload["arms"]
     references = payload["references"]
     styles = {"CN exact": ("black", "--"), "Strang 1-step": ("0.45", ":")}
-    colour_of = {f"{e['arm']}|{e['lambda']:g}": colours[i % len(colours)] for i, e in enumerate(arms)}
+    # One hue per family, darker for larger lambda: 11 arms must never share a colour.
+    families = sorted({e["family"] for e in arms})
+    maps = ("Blues", "Greens", "Oranges", "Purples", "Reds", "Greys")
+    family_colour = {f: plt.get_cmap(maps[i % len(maps)])(.75) for i, f in enumerate(families)}
+    colour_of = {}
+    for family in families:
+        members = sorted((e for e in arms if e["family"] == family), key=lambda e: e["lambda"])
+        for rank, e in enumerate(members):
+            shade = .55 + .4 * rank / max(len(members) - 1, 1)
+            colour_of[f"{e['arm']}|{e['lambda']:g}"] = plt.get_cmap(
+                maps[families.index(family) % len(maps)])(shade)
 
     # 1. Does a larger lambda move the model toward the CN step?
     figure, axis = plt.subplots(figsize=(8, 5))
@@ -269,8 +278,9 @@ def make_probe_plots(payload: dict, output) -> None:
         xs = [weights.index(w) for w in weights if w in entries]
         medians = [_median(m["distance_to_cn"] for m in entries[w]["per_seed"].values())
                    for w in weights if w in entries]
-        colour = colours[index % len(colours)]
-        axis.plot(xs, medians, color=colour, marker="o", label=f"{family} / {family}+PDE (median)")
+        colour = family_colour[family]
+        label = f"{family} / {family}+PDE" if len(entries) > 1 else family
+        axis.plot(xs, medians, color=colour, marker="o", label=f"{label} (median)")
         for w in entries:
             values = [m["distance_to_cn"] for m in entries[w]["per_seed"].values()]
             axis.plot([weights.index(w)] * len(values), values, ".", color=colour, alpha=.5)
@@ -289,21 +299,24 @@ def make_probe_plots(payload: dict, output) -> None:
     figure.savefig(output / "plots" / "phase7_toward_cn.png", dpi=150)
     plt.close(figure)
 
-    # 2. Long-horizon invariants, one line per seed.
+    # 2. Long-horizon invariants, one line per seed.  Diverging seeds overflow towards
+    # 1e300, which wrecks log autoscaling; clip at a ceiling and mark them there.
+    ceiling = 1e3
+    clip = lambda values: [min(max(v, floor), ceiling) for v in values]
     figure, axes = plt.subplots(1, 2, figsize=(14, 5.2))
     for axis, key, title in zip(axes, ("energy_drift", "mass_drift"), ("Energy drift", "Mass drift")):
         for entry in arms:
             colour = colour_of[f"{entry['arm']}|{entry['lambda']:g}"]
             longs = [m["long_horizon"] for m in entry["per_seed"].values() if m["long_horizon"]]
             for number, long in enumerate(longs):
-                axis.plot(long["steps"], [max(v, floor) for v in long[key]], color=colour, lw=1.2,
+                axis.plot(long["steps"], clip(long[key]), color=colour, lw=1.2,
                           alpha=.75, label=f"{entry['arm']} λ={entry['lambda']:g}" if number == 0 else None)
                 if long["diverged_at"] is not None and long["steps"]:
-                    axis.plot(long["steps"][-1], max(long[key][-1], floor), "x", color=colour)
+                    axis.plot(long["steps"][-1], clip(long[key][-1:])[0], "x", color=colour)
         for name, measured in references.items():
             colour, dash = styles.get(name, ("0.3", "-."))
             long = measured["long_horizon"]
-            axis.plot(long["steps"], [max(v, floor) for v in long[key]], color=colour, ls=dash,
+            axis.plot(long["steps"], clip(long[key]), color=colour, ls=dash,
                       lw=1.6, label=name)
         horizon = payload["settings"]["checkpoints"][-1]
         axis.axvline(horizon, color="0.6", lw=.8)
@@ -312,7 +325,8 @@ def make_probe_plots(payload: dict, output) -> None:
         axis.set_xscale("log")
         axis.set_yscale("log")
         axis.set_xlabel("step")
-        axis.set_title(f"{title} (one line per seed; × = diverged)")
+        axis.set_ylim(floor, ceiling * 10)
+        axis.set_title(f"{title} (one line per seed; × = diverged; clipped at {ceiling:g})")
         axis.grid(True, which="both", alpha=.3)
     axes[0].legend(fontsize=7, ncol=2)
     figure.suptitle(f"Phase 7 probes: long-horizon invariants, float64 — {status}")
