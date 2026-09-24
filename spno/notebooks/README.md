@@ -8,6 +8,27 @@
 | [08_resolution_robustness.ipynb](08_resolution_robustness.ipynb) | Evaluate resolution, noise robustness, and sample efficiency |
 | [09_misspecification.ipynb](09_misspecification.ipynb) | Evaluate equation misspecification sweeps with a shared zero-perturbation baseline |
 | [10_dirichlet.ipynb](10_dirichlet.ipynb) | Solve Laplace/Poisson problems on a disk and rectangle, without training |
+| [11_hybrid_kinetic_ablation.ipynb](11_hybrid_kinetic_ablation.ipynb) | Self-contained Colab study of exact kinetic + learned local across G1–G9, paired component ablations, fresh probe seeds, bandwidth sweeps, dispersion, and long rollouts |
+
+## Hybrid follow-up notebook
+
+Upload **`11_hybrid_kinetic_ablation.ipynb` directly to Colab** and run top to bottom.
+The experiment source is embedded in the notebook: no separate Python files,
+source bundle, or GitHub update is needed. The existing Phase 6 eval-only/full
+checkpoint ZIP should be in MyDrive, or set an extracted `SOURCE_ROOT` in cell 1.
+Only the base, G6a, and G7 C1 checkpoints are required; no training data is needed.
+
+The default study uses 3 training seeds, 5 independent probe seeds, 16 ICs per probe,
+bandwidths 4–32, and a 2,000-step long horizon. G8 is the newly assigned long-rollout
+and conservation arm. The four literal frozen component combinations share each
+probe batch and refined reference. Results resume per case/probe/training seed and
+include PNG/PDF figures, per-IC spectra and metrics, paired bootstrap comparisons,
+and reference refinement checks. Budget-bound source checkpoints remain labeled
+exploratory. `SMOKE=True` is a setup check, not a scientific result.
+
+Maintainers: regenerate the embedded source after edits with
+`python scripts/build_hybrid_notebook.py`. The builder deliberately embeds no
+weights, datasets, outputs, or notebook copies.
 
 ## Getting started after Phase 6
 
