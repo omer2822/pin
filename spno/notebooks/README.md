@@ -182,8 +182,10 @@ Use the updated source ZIP when prompted; the code bundle itself contains no wei
 ## Gauge-identifiable C1 (C1g) follow-up
 
 C1g is C1 with the kinetic zero mode pinned, κθ(k) = f(k²) − f(0). It is an exact
-reparameterization of C1: same parameters, same seed initialization, same data and
-40-epoch protocol, so C1 vs C1g is a paired comparison.
+reparameterization of C1: same parameters, bitwise-identical seed initialization, same data
+and 40-epoch protocol. The λ=0 C1 is the Phase 6 import trained on Windows, while C1g is
+trained in Colab, so the cleanest paired contrast is C1+PDE vs C1g+PDE at λ=0.01: both are
+trained by the same workflow code path.
 
 1. **Train C1g** in `00_training.ipynb`: `TRAIN_PHASES=[7]`, `C1G_LAMBDAS=[0.0, 0.01]`.
    This adds 6 jobs (C1g and C1g+PDE × 3 seeds). Every existing A / C1 / B-loop job keeps

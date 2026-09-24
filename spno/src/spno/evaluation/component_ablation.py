@@ -104,7 +104,11 @@ class ProbeCase:
 def probe_cases(data, bandwidths, *, include_g8=True):
     """Preserve the existing G-arm definitions; G8 is explicitly a new extension."""
     cases = [ProbeCase("G1-interpolation", data),
-             ProbeCase("G2-extrapolation", replace(data, alpha_range=(.5, 1.5), beta_range=(-.5, .8)))]
+             ProbeCase("G2-extrapolation", replace(data, alpha_range=(.5, 1.5), beta_range=(-.5, .8))),
+             # G2 moves alpha (read by the kinetic half) and beta (the local half) together;
+             # the split cases let a component swap attribute the failure to one half.
+             ProbeCase("G2-alpha-only", replace(data, alpha_range=(.5, 1.5))),
+             ProbeCase("G2-beta-only", replace(data, beta_range=(-.5, .8)))]
     for tag, family, changes in (
         ("zero", "zero", {}), ("cosine", "cosine", {}),
         ("well", "gaussian_well", {}),

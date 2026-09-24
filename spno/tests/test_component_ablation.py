@@ -315,17 +315,21 @@ def test_substituted_c1g_cohort_runs_base_rows_and_gauged_swaps_are_identities(h
             assert np.allclose(by_model[name]["records"][-1]["state_error"], ungauged, rtol=1e-10, atol=1e-14)
 
 
-def _write_c1g_records(root, cfg, runs):
-    """Workflow-shaped C1g records: experiments/<stable_hash(spec)>/{record.json, model.pt}."""
+def _write_c1g_records(root, cfg, runs, *, name="C1g"):
+    """Workflow-shaped records: experiments/<stable_hash(spec)>/{record.json, model.pt}."""
     from spno.artifacts import file_digest
     from spno.workflow import stable_hash
-    architecture = {"kinetic_mode": "K0", "local_mode": "L0", "width": 4, "kinetic_gauge": "zero_mode"}
+    gauge = "zero_mode" if name == "C1g" else "free"
+    architecture = {"kinetic_mode": "K0", "local_mode": "L0", "width": 4}
+    if name == "C1g":
+        architecture["kinetic_gauge"] = gauge
     for seed, weight in runs:
-        spec = {"name": "C1g", "seed": seed, "physics_weight": weight, "data_hash": config_hash(cfg), "quick": False}
+        spec = {"name": name, "seed": seed, "physics_weight": weight, "data_hash": config_hash(cfg), "quick": False}
         folder = root / "experiments" / stable_hash(spec)
         torch.manual_seed(seed)
-        model = DensityPhaseSplitStep(cfg.domain, width=4, kinetic_gauge="zero_mode")
-        meta = CheckpointMetadata(1, "C1g", config_hash(cfg), seed, "one-step", None, cfg.dt, architecture, False, 0)
+        model = DensityPhaseSplitStep(cfg.domain, width=4, kinetic_gauge=gauge)
+        meta = CheckpointMetadata(1, name, config_hash(cfg), seed, "pino" if weight else "one-step",
+                                  None, cfg.dt, architecture, False, 0)
         save_checkpoint(folder / "model.pt", model, meta)
         (folder / "record.json").write_text(json.dumps({"spec": spec, "sha256": file_digest(folder / "model.pt")}))
 
@@ -350,10 +354,12 @@ def test_gauge_notebook_executes_every_section(hybrid_source, tmp_path, monkeypa
     config_path = tmp_path / "source.json"
     config_path.write_text(json.dumps({"data": asdict(cfg)}))
     options = {**small_options(), "gauge": True,
-               "case_names": ["G1-interpolation", "G2-extrapolation", "G3-potential-strong", "G4-bandwidth-2"]}
+               "case_names": ["G1-interpolation", "G2-alpha-only", "G2-beta-only", "G3-potential-strong",
+                              "G4-bandwidth-2"]}
     hybrid = run_study(source, tmp_path / "hybrid", data=cfg,
                        options={**small_options(), "case_names": ["G1-interpolation", "G4-bandwidth-2"]})
-    _write_c1g_records(tmp_path / "workflow", cfg, ((0, 0.), (1, 0.), (0, .01)))
+    _write_c1g_records(tmp_path / "workflow", cfg, ((0, 0.), (1, 0.), (0, .01), (1, .01)))
+    _write_c1g_records(tmp_path / "workflow", cfg, ((0, .01), (1, .01)), name="C1")
     for key, value in {"SPNO_PROJECT_ROOT": project, "SPNO_SOURCE_ROOT": source,
                        "SPNO_SOURCE_CONFIG": config_path, "SPNO_OUTPUT_ROOT": tmp_path / "gauge",
                        "SPNO_HYBRID_RUN": hybrid, "SPNO_WORKFLOW_ROOT": tmp_path / "workflow",
@@ -374,8 +380,11 @@ def test_gauge_notebook_executes_every_section(hybrid_source, tmp_path, monkeypa
     assert (hybrid / "summary.v1.json").is_file()
     assert (output / "port_check.json").is_file()
     laws = json.loads((output / "local_law.json").read_text())["laws"]
-    assert set(laws) == {"C1 raw", "C1 shifted", "C1g"}
+    assert set(laws) == {"C1 raw", "C1 shifted", "C1g", "C1+PDE shifted", "C1g+PDE"}
+    assert json.loads((output / "port_check.json").read_text())["verdicts"]
     for family in ("c1", "c1g"):
         manifests = list((output / family).glob("*/manifest.json"))
         assert len(manifests) == 1 and json.loads(manifests[0].read_text())["complete"]
     assert list((output / "c1g").rglob("07_reciprocal_ablation.png"))
+    cases = json.loads(next((output / "c1").glob("*/manifest.json")).read_text())["cases"]
+    assert {"G2-alpha-only", "G2-beta-only"} <= {c["name"] for c in cases}

@@ -42,9 +42,10 @@ PAIRS = (("exactK_learnedL", "C1"), ("learnedK_exactL", "C1"),
 GAUGED_PAIRS = (("exactK_learnedL_g", "C1"), ("learnedK_exactL_g", "C1"),
                 ("exactK_learnedL_g", "learnedK_exactL_g"))
 
-#: Exp 1 selection for new rollouts: the spectral axis (stresses K), beta/alpha and V
-#: shifts (stress L), and the in-distribution control.
-RECIPROCAL_CASES = ("G1-interpolation", "G2-extrapolation", "G3-potential-strong",
+#: Exp 1 selection for new rollouts: the spectral and alpha axes (stress K), the beta and
+#: V axes (stress L), joint G2 for continuity, and the in-distribution control.
+RECIPROCAL_CASES = ("G1-interpolation", "G2-extrapolation", "G2-alpha-only",
+                    "G2-beta-only", "G3-potential-strong",
                     "G3-potential-short", "G4-bandwidth-4", "G4-bandwidth-8",
                     "G4-bandwidth-12", "G4-bandwidth-16", "G4-bandwidth-24")
 
@@ -126,34 +127,41 @@ def load_c1_cohorts(source_root, data, seeds, *, allow_budget_bound):
     return data, models, provenance
 
 
-def load_c1g_cohort(workflow_root, data, seeds):
-    """C1g lambda=0 checkpoints trained by the Phase 7 workflow, as a base cohort."""
+def load_c1g_cohort(workflow_root, data, seeds, *, name="C1g", weight=0.0):
+    """C1-family checkpoints trained by the Phase 7 workflow, as a base cohort.
+
+    Defaults to C1g at lambda=0. ``name="C1", weight=0.01`` loads C1+PDE, whose partner
+    C1g+PDE went through the same workflow path: the cleanest C1-vs-C1g pair, since the
+    lambda=0 C1 is the Phase 6 import trained on other hardware.
+    """
     from spno.workflow import stable_hash
+    if name not in ("C1", "C1g"):
+        raise ValueError("Component ablation needs a C1-family model")
     records = {}
     for path in sorted(Path(workflow_root).glob("experiments/*/record.json")):
         record = json.loads(path.read_text())
         spec = record["spec"]
-        if spec["name"] != "C1g" or spec["physics_weight"] != 0 or spec["seed"] not in seeds:
+        if spec["name"] != name or spec["physics_weight"] != weight or spec["seed"] not in seeds:
             continue
         if stable_hash(spec) != path.parent.name:
             raise RuntimeError(f"Record identity mismatch: {path}")
         if spec["data_hash"] != config_hash(data):
-            raise ValueError(f"C1g seed {spec['seed']} was trained on other data")
+            raise ValueError(f"{name} seed {spec['seed']} was trained on other data")
         if spec["seed"] in records:
-            raise ValueError(f"Ambiguous C1g checkpoints for seed {spec['seed']}; select one workflow")
+            raise ValueError(f"Ambiguous {name} checkpoints for seed {spec['seed']}; select one workflow")
         records[spec["seed"]] = (path.parent / "model.pt", record)
     missing = sorted(set(seeds) - set(records))
     if missing:
-        raise ValueError(f"C1g checkpoints missing for seeds {missing}; train them in 00_training")
+        raise ValueError(f"{name} (lambda={weight:g}) checkpoints missing for seeds {missing}; train them in 00_training")
     models, provenance = {}, []
     for seed, (path, record) in sorted(records.items()):
         if file_digest(path) != record["sha256"]:
             raise RuntimeError(f"Checkpoint corrupt: {path}")
         payload = load_checkpoint_payload(path)
-        model = _model_from_checkpoint(payload, data, expected_name="C1g")
+        model = _model_from_checkpoint(payload, data, expected_name=name)
         model.load_state_dict(payload.state_dict, strict=True)
         models[seed] = widen_to_double(model, device="cpu").eval()
-        provenance.append({"name": "C1g", "seed": seed, "sha256": record["sha256"],
+        provenance.append({"name": name if not weight else f"{name}+PDE", "seed": seed, "sha256": record["sha256"],
                            "metadata": asdict(payload.metadata), "quick": bool(record["spec"].get("quick"))})
     return {"base": models}, provenance
 

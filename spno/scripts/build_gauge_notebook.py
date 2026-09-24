@@ -35,7 +35,7 @@ def build_notebook():
     | Section | Experiment | Needs |
     |---|---|---|
     | (a) | Reciprocal ablation stats on the saved run: K_exact+L_θ vs K_θ+L_exact | Drive run `3bf81deae4ef1ff9` |
-    | (b) | Port cross-check, then gauged swaps on spectral (G4) and β/V (G2, G3) axes | Phase 6 C1 checkpoints |
+    | (b) | Port cross-check, then gauged swaps on K axes (G4 spectral, G2-α) and L axes (G2-β, G3 V) | Phase 6 C1 checkpoints |
     | (c) | Local law: is L_θ ≈ βρ − V once the gauge is fixed? | (b), plus C1g if trained |
     | (d) | The same ablation on **C1g**, trained with κθ(0) = 0 from the start | C1g from `00_training` (`C1G_LAMBDAS=[0, 0.01]`) |
 
@@ -43,16 +43,20 @@ def build_notebook():
 
     1. **The gauge fix is an exact reparameterization**, not a smaller model class: the local net's
        free bias absorbs any constant. C1g therefore tests *identifiability and optimization*, not
-       expressivity. C1 and C1g share seeds, initialization, data order and the 40-epoch protocol.
+       expressivity. At the same seed, C1 and C1g start from bitwise-identical weights and use the
+       same 40-epoch protocol. **But the λ=0 C1 is the Phase 6 import trained on Windows, while C1g
+       is trained in Colab**, so small λ=0 differences may be hardware, not gauge. The clean paired
+       contrast is **C1+PDE vs C1g+PDE at λ=0.01**: both go through the same workflow code path.
     2. **C1g is not expected to repair bandwidth-16 error of the full model.** The learned dispersion
        plateaus above |k| ≈ 9 because the training ICs have no energy there — a data-support limit
        that no gauge choice touches.
     3. **C1g is expected to** (i) close the raw-vs-aligned gap, (ii) make both component swaps
        meaningful *without* any post-hoc correction, and (iii) possibly move the effective
        nonlinearity from ≈ 0.88β toward β.
-    4. **Double dissociation test.** If the kinetic half is what fails under spectral shift, then
-       K_exact+L_θ should survive G4 while K_θ+L_exact fails; under β/V shift (G2, G3) the
-       reverse pattern implicates the local half.
+    4. **Double dissociation test.** The kinetic half reads (k², α, β); the local half reads (ρ, V, α, β).
+       If the kinetic half is what fails under spectral shift, K_exact+L_θ should survive G4 and
+       G2-α-only while K_θ+L_exact fails; under G2-β-only and G3 (V) the reverse pattern implicates
+       the local half. The joint G2 moves α and β together and stresses **both** halves.
     ''')
     cell("markdown", '''
     ## 1. Settings
@@ -80,8 +84,9 @@ def build_notebook():
         "spatial_samples": 2, "spatial_tolerance": 1e-3, "tail_threshold": 1e-6,
         "device": "cpu", "threads": 2, "allow_budget_bound": True, "bootstrap_draws": 2000,
         "gauge": True,
-        # Spectral axis (stresses K), beta/alpha and V axes (stress L), and the control.
-        "case_names": ["G1-interpolation", "G2-extrapolation", "G3-potential-strong",
+        # K axes: G4 spectral, G2-alpha. L axes: G2-beta, G3 (V). Joint G2; G1 control.
+        "case_names": ["G1-interpolation", "G2-extrapolation", "G2-alpha-only",
+                       "G2-beta-only", "G3-potential-strong",
                        "G3-potential-short", "G4-bandwidth-4", "G4-bandwidth-8",
                        "G4-bandwidth-12", "G4-bandwidth-16", "G4-bandwidth-24"],
     }
@@ -231,6 +236,21 @@ def build_notebook():
                   ", ".join(f"β={f['beta']:+.1f}: {f['slope_over_beta']:+.3f}" for f in profile["fits"]
                             if f["slope_over_beta"] is not None))
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+    # Recorded 2026-09-23 values, with explicit tolerances. CHECK means "look before trusting".
+    verdicts = []
+    for seed, record in port_check.items():
+        hybrid = record.get("G4-bandwidth-8", {}).get("gauge-fixed hybrid")
+        if hybrid:
+            verdicts.append((seed, "bw8 gauged hybrid aligned ≈ 4e-3 (×2)", 2e-3 <= hybrid["aligned"] <= 8e-3))
+            verdicts.append((seed, "bw8 gauged hybrid raw ≈ 6e-2 (×2)", 3e-2 <= hybrid["raw"] <= 1.2e-1))
+        for label, stats in record["drift"].items():
+            verdicts.append((seed, f"drift slope 1.000±0.01, corr>0.999 [{label}]",
+                             abs(stats["slope"] - 1) < .01 and stats["corr"] > .999))
+        ratios = [f["slope_over_beta"] for f in record["delta_q"] if f["slope_over_beta"] is not None]
+        verdicts.append((seed, "δq slope/β in [−0.17, −0.07]", all(-.17 <= r <= -.07 for r in ratios)))
+    for seed, label, ok in verdicts:
+        print(f"{'PASS ' if ok else 'CHECK'} seed {seed}: {label}")
+    port_check["verdicts"] = [{"seed": s, "check": l, "pass": bool(ok)} for s, l, ok in verdicts]
     atomic_json(OUTPUT_ROOT / "port_check.json", clean_json(port_check))
     ''')
     cell("markdown", r'''
@@ -255,6 +275,8 @@ def build_notebook():
     * **C1 shifted** — ν + κθ(0), the post-hoc gauge fix. The intercept is removed by construction,
       so the informative comparison is **C1 shifted vs C1g** on c_βρ and c_V.
     * **C1g** — trained with κθ(0) = 0; no shift exists to apply.
+    * **C1+PDE shifted vs C1g+PDE** (λ=0.01) — the headline pair: same workflow code path and runtime,
+      same seeds and initialization, differing only in the gauge. Shown once both are trained.
     ''')
     cell("code", '''
     import matplotlib.pyplot as plt
@@ -265,10 +287,22 @@ def build_notebook():
         print("C1g not available yet:", error)
         print("Train it in 00_training.ipynb: TRAIN_PHASES=[7], C1G_LAMBDAS=[0.0, 0.01].")
 
+    # The clean pair: C1+PDE and C1g+PDE at lambda=0.01, both trained by the same workflow path.
+    pde_pair = {}
+    for family in ("C1", "C1g"):
+        try:
+            pde_pair[family] = load_c1g_cohort(WORKFLOW_ROOT, data_config, SETTINGS["training_seeds"],
+                                               name=family, weight=0.01)[0]["base"]
+        except ValueError as error:
+            print(f"{family}+PDE (λ=0.01) not available:", error)
+
     law_inputs, _ = sample_probe(cases["G1-interpolation"], PROBE["probe_seed"], PROBE["local_law_batch"])
     variants = {"C1 raw": (c1_cohorts["base"], False), "C1 shifted": (c1_cohorts["base"], True)}
     if c1g_cohorts:
         variants["C1g"] = (c1g_cohorts[0]["base"], False)
+    if len(pde_pair) == 2:
+        variants["C1+PDE shifted"] = (pde_pair["C1"], True)
+        variants["C1g+PDE"] = (pde_pair["C1g"], False)
     laws, profiles = {}, {}
     with torch.inference_mode():
         for label, (by_seed, shift) in variants.items():
@@ -282,7 +316,8 @@ def build_notebook():
     display(HTML("<p>Truth: beta_rho=+1, potential=−1, intercept=0, alpha=0.</p><table>" + header + body + "</table>"))
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 4.5), layout="constrained")
-    colors = {"C1 raw": "#bf4b45", "C1 shifted": "#e39a8f", "C1g": "#21866c"}
+    colors = {"C1 raw": "#bf4b45", "C1 shifted": "#e39a8f", "C1g": "#21866c",
+              "C1+PDE shifted": "#d9822b", "C1g+PDE": "#2b6cb0"}
     for label, by_seed in profiles.items():
         if label == "C1 raw":
             continue  # its intercept (the gauge constant) dwarfs the shape
@@ -336,9 +371,9 @@ def build_notebook():
 
     * **Localization claim** — needs the dissociation: G4 hurts the swaps that keep K_θ, G2/G3 hurt
       the swaps that keep L_θ, in the *gauged* rows. Raw-row differences alone can be pure gauge.
-    * **Gauge claim** — C1 vs C1g full-model rows are a paired comparison (same seeds, init, data,
-      protocol). A C1g win on raw error with an unchanged aligned error means the gauge was costing
-      phase, not shape.
+    * **Gauge claim** — lead with C1+PDE vs C1g+PDE (λ=0.01, same code path). The λ=0 C1 vs C1g rows
+      share initialization and protocol but not training hardware. A C1g win on raw error with an
+      unchanged aligned error means the gauge was costing phase, not shape.
     * **Local-law claim** — compare C1 shifted with C1g on c_βρ. If C1g moves toward 1, gauge
       ambiguity was also hurting the *learning* of the nonlinearity; if both stay near 0.88, the
       bias is an L0 optimization limit (the L1/L2 rungs are the follow-up).
