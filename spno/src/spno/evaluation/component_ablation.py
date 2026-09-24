@@ -29,33 +29,62 @@ METRICS = ("state_error", "aligned_state_error", "phase_rms", "global_phase",
 
 
 class ComponentSplitStep(ExactSplitStep):
-    """Independent copy of the retained modules; no fitting or gauge correction."""
+    """Independent copy of the retained modules; no fitting.
 
-    def __init__(self, c1, *, exact_kinetic: bool, exact_local: bool):
+    ``gauge="zero_mode"`` ports the 2026-09-23 Colab ``GaugeFixed`` cell. The kinetic
+    and local rates can trade a constant (kappa -> kappa - c, nu -> nu + c) without
+    changing C1, so a swap only means something once c = kappa_theta(0; alpha, beta) is
+    pinned: a learned kinetic loses its k=0 rate and a learned local gains it. With both
+    halves learned the move is an exact identity, which the tests assert.
+    """
+
+    def __init__(self, c1, *, exact_kinetic: bool, exact_local: bool, gauge: str = "none"):
         super().__init__(c1.domain)
+        if gauge not in ("none", "zero_mode"):
+            raise ValueError("gauge must be 'none' or 'zero_mode'")
+        self.gauge = gauge
         self.kinetic = None if exact_kinetic else deepcopy(c1.kinetic)
         self.local = None if exact_local else deepcopy(c1.local)
+        # Source of the offset c(alpha, beta); only a learned local term receives it.
+        self.gauge_source = (deepcopy(c1.kinetic)
+                             if gauge == "zero_mode" and not exact_local else None)
+
+    def _offset(self, alpha, beta, dtype):
+        parameters = torch.stack((alpha.to(dtype), beta.to(dtype)), -1)
+        return self.gauge_source(parameters)[:, :1]  # rate at k=0 (fftfreq index 0)
 
     def _kinetic_half(self, field, parameters, dt):
         if self.kinetic is None:
             return super()._kinetic_half(field, parameters, dt)
         rate = self.kinetic(parameters)
+        if self.gauge == "zero_mode":
+            rate = rate - rate[:, :1]
         return torch.fft.ifft(torch.fft.fft(field) * torch.exp(.5j * dt * rate))
 
     def local_phase(self, field, potential, alpha, beta):
         if self.local is None:
             return super().local_phase(field, potential, alpha, beta)
-        return self.local(field.abs().square(), potential, alpha, beta)
+        rate = self.local(field.abs().square(), potential, alpha, beta)
+        if self.gauge_source is not None:
+            rate = rate + self._offset(alpha, beta, field.real.dtype)
+        return rate
 
 
-def component_models(c1):
+GAUGED_MODEL_NAMES = ("exactK_learnedL_g", "learnedK_exactL_g")
+
+
+def component_models(c1, *, gauge=False):
     if not isinstance(c1, DensityPhaseSplitStep):
         raise TypeError("The paired intervention requires a C1 checkpoint")
     models = {"C1": deepcopy(c1)}
-    for name, exact_k, exact_l in (("exactK_learnedL", True, False),
-                                   ("learnedK_exactL", False, True),
-                                   ("exact_split", True, True)):
-        models[name] = ComponentSplitStep(c1, exact_kinetic=exact_k, exact_local=exact_l)
+    swaps = [("exactK_learnedL", True, False, "none"),
+             ("learnedK_exactL", False, True, "none"),
+             ("exact_split", True, True, "none")]
+    if gauge:
+        swaps += [("exactK_learnedL_g", True, False, "zero_mode"),
+                  ("learnedK_exactL_g", False, True, "zero_mode")]
+    for name, exact_k, exact_l, fix in swaps:
+        models[name] = ComponentSplitStep(c1, exact_kinetic=exact_k, exact_local=exact_l, gauge=fix)
     for model in models.values():
         model.eval().requires_grad_(False)
         # Explicit evaluation of dt transfer, including the original C1.
@@ -270,3 +299,128 @@ def crossed_interval(values, *, draws=2000, seed=731):
     low, high = np.quantile(means, [.025, .975])
     return {"mean": float(values.mean()), "low": float(low), "high": float(high),
             "status": "descriptive-bootstrap" if nt > 1 and npb > 1 else "insufficient-seed-replication"}
+
+
+# --- Local-generator bias (ported from the 2026-09-23 Colab cells, section 8) ---------
+
+
+def local_rate(c1, density, potential, alpha, beta, *, shift=True):
+    """The learned local rate, optionally carrying the kinetic k=0 rate (the gauge move)."""
+    rate = c1.local(density, potential, alpha, beta)
+    if shift:
+        parameters = torch.stack((alpha.to(density.dtype), beta.to(density.dtype)), -1)
+        rate = rate + c1.kinetic(parameters)[:, :1]
+    return rate
+
+
+@torch.no_grad()
+def predicted_phase_drift(c1, inputs, dt, *, steps=200, reference_substeps=64):
+    """Measured global phase of the gauge-fixed hybrid vs Sum dt <delta q>_rho.
+
+    The local substep is ``midpoint * exp(+i dt rate)``, so a biased learned rate adds
+    ``dt * (learned - true)`` of phase, projected onto the global mode by density
+    weighting. The prediction is accumulated from both the hybrid's own density and the
+    reference density. Returns per-IC curves plus the Colab statistics.
+    """
+    x, potential, alpha, beta = inputs
+    if x.dtype != torch.complex128 or potential.dtype != torch.float64:
+        raise TypeError("predicted_phase_drift needs complex128/float64 inputs")
+    hybrid = ComponentSplitStep(c1, exact_kinetic=True, exact_local=False, gauge="zero_mode")
+    reference = SubsteppedReference(c1.domain, reference_substeps)
+    parameters = torch.stack((alpha, beta), -1)
+
+    def global_rate_error(field):
+        rho = hybrid._kinetic_half(field, parameters, dt).abs().square()  # exact half-step midpoint
+        error = local_rate(c1, rho, potential, alpha, beta) - (beta[:, None] * rho - potential)
+        return (rho * error).sum(-1) / rho.sum(-1)
+
+    h, r = x.clone(), x.clone()
+    acc_h, acc_r = torch.zeros_like(alpha), torch.zeros_like(alpha)
+    measured, pred_h, pred_r = [], [], []
+    for _ in range(steps):
+        acc_h = acc_h + dt * global_rate_error(h)
+        acc_r = acc_r + dt * global_rate_error(r)
+        h, r = hybrid(h, potential, alpha, beta, dt), reference(r, potential, alpha, beta, dt)
+        measured.append(torch.angle((r.conj() * h).sum(-1)))
+        pred_h.append(acc_h)
+        pred_r.append(acc_r)
+    measured = np.unwrap(torch.stack(measured).cpu().numpy(), axis=0)  # (steps, batch)
+    predictions = {"hybrid_rho": torch.stack(pred_h).cpu().numpy(),
+                   "reference_rho": torch.stack(pred_r).cpu().numpy()}
+    if not all(np.isfinite(v).all() for v in (measured, *predictions.values())):
+        raise RuntimeError("Nonfinite phase drift")
+    if np.abs(np.diff(measured, axis=0)).max() >= .5:
+        raise RuntimeError("Per-step phase jump too large to unwrap")
+    stats = {}
+    for label, pred in predictions.items():
+        stats[label] = {
+            "slope": float((measured * pred).sum() / (pred ** 2).sum()),
+            "corr": float(np.corrcoef(measured.ravel(), pred.ravel())[0, 1]),
+            "relative_residual": float(np.linalg.norm(measured - pred) / np.linalg.norm(measured)),
+            "endpoint_corr": float(np.corrcoef(measured[-1], pred[-1])[0, 1]),
+        }
+    return {"time": (dt * np.arange(1, steps + 1)).tolist(), "measured": measured.tolist(),
+            "predicted": {k: v.tolist() for k, v in predictions.items()}, "stats": stats}
+
+
+@torch.no_grad()
+def delta_q_profile(c1, rho_samples, *, alpha=.9, betas=(-.4, -.2, 0., .3, .6),
+                    shift=True, grid=200, n_fit=4096, seed=0):
+    """delta q(rho) = learned local rate - beta*rho at V=0, with rho-weighted line fits.
+
+    ``rho_samples`` are pointwise densities where the data live. rho-weighting is the
+    global-phase weighting, so ``mean`` is the drift rate <delta q>_rho.
+    """
+    rho_samples = np.asarray(rho_samples, dtype=float).ravel()
+    betas_t = torch.tensor(betas, dtype=torch.float64)
+    alphas = torch.full_like(betas_t, float(alpha))
+    rho_hi = float(np.quantile(rho_samples, .999))
+    rho_grid = torch.linspace(0, rho_hi, grid, dtype=torch.float64)
+    rho_fit = torch.from_numpy(np.random.default_rng(seed).choice(rho_samples, n_fit))
+    w = rho_fit.numpy()
+
+    def dq(rho):
+        d = rho.expand(len(betas_t), -1)
+        return (local_rate(c1, d, torch.zeros_like(d), alphas, betas_t, shift=shift)
+                - betas_t[:, None] * d).numpy()
+
+    curves, sampled = dq(rho_grid), dq(rho_fit)
+    design = np.stack([np.ones_like(w), w], 1) * np.sqrt(w)[:, None]
+    fits = []
+    for j, beta in enumerate(betas_t.tolist()):
+        offset, slope = np.linalg.lstsq(design, sampled[j] * np.sqrt(w), rcond=None)[0]
+        fits.append({"beta": beta, "mean": float((w * sampled[j]).sum() / w.sum()),
+                     "offset": float(offset), "slope": float(slope),
+                     "slope_over_beta": float(slope / beta) if beta else None})
+    return {"alpha": float(alpha), "rho_grid": rho_grid.tolist(), "curves": curves.tolist(),
+            "fits": fits, "shift": shift, "rho_quantile_999": rho_hi}
+
+
+@torch.no_grad()
+def local_law(c1, inputs, *, shift=True):
+    """Fit nu ~ c_b*(beta*rho) + c_V*V + c_0 + c_a*(alpha - mean alpha) pointwise.
+
+    The truth is (1, -1, 0, 0). Samples are every grid point of a probe batch, so the fit
+    lives on the data distribution; weights are rho, the global-phase weighting.
+    ``shift=True`` adds kappa_theta(0) (post-hoc gauge fix); a C1g model has it at 0.
+    """
+    x, potential, alpha, beta = inputs
+    rho = x.abs().square()
+    nu = local_rate(c1, rho, potential, alpha, beta, shift=shift)
+    truth = beta[:, None] * rho - potential
+    a = (alpha - alpha.mean())[:, None].expand_as(rho)
+    columns = [beta[:, None] * rho, potential, torch.ones_like(rho), a]
+    w = rho.flatten().cpu().numpy()
+    design = torch.stack([c.flatten() for c in columns], -1).cpu().numpy()
+    target = nu.flatten().cpu().numpy()
+    sw = np.sqrt(w)[:, None]
+    # alpha is constant in fixed-alpha probes; lstsq's minimum-norm solution sets c_a = 0.
+    coefficients = np.linalg.lstsq(design * sw, target * sw[:, 0], rcond=None)[0]
+    residual = target - design @ coefficients
+    error = (nu - truth).flatten().cpu().numpy()
+    norm = np.sqrt((w * truth.flatten().cpu().numpy() ** 2).sum())
+    return {"beta_rho": float(coefficients[0]), "potential": float(coefficients[1]),
+            "intercept": float(coefficients[2]), "alpha": float(coefficients[3]),
+            "relative_rmse_vs_truth": float(np.sqrt((w * error ** 2).sum()) / norm),
+            "unexplained_relative_rmse": float(np.sqrt((w * residual ** 2).sum()) / norm),
+            "shift": shift, "weighting": "rho", "truth": [1., -1., 0., 0.]}

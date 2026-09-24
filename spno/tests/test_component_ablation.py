@@ -9,7 +9,8 @@ import torch
 from spno.checkpoints import CheckpointMetadata, save_checkpoint
 from spno.config import DataConfig, config_hash
 from spno.evaluation.component_ablation import (
-    ComponentSplitStep, DensityPhaseSplitStep, component_models, crossed_interval,
+    GAUGED_MODEL_NAMES, ComponentSplitStep, DensityPhaseSplitStep, component_models, crossed_interval,
+    delta_q_profile, local_law, predicted_phase_drift,
     kinetic_dispersion, measure_rollout, probe_cases, reference_frames, sample_probe, state_metrics,
 )
 from spno.solvers.split_step import SplitStepNLSOperator
@@ -186,3 +187,69 @@ def test_notebook_executes_every_cell(hybrid_source, tmp_path, monkeypatch):
     assert not any(o.output_type == "error" for c in executed.cells if c.cell_type == "code" for o in c.outputs)
     assert list((tmp_path / "notebook-output").rglob("01_all_arms_hybrid_vs_C1.pdf"))
     assert list((tmp_path / "notebook-output").rglob("paired_comparisons.csv"))
+
+
+def _random_c1(cfg, **kwargs):
+    torch.manual_seed(3)
+    model = DensityPhaseSplitStep(cfg.domain, width=4, **kwargs).double()
+    # Break the zero init of any correction head so no rung is trivially exact.
+    with torch.no_grad():
+        for parameter in model.parameters():
+            parameter.add_(.3 * torch.randn_like(parameter))
+    return model.eval()
+
+
+def test_gauge_move_is_an_exact_identity_on_c1():
+    cfg = replace(DataConfig(), grid_size=16, initial_bandwidth=4)
+    model = _random_c1(cfg)
+    inputs, _ = sample_probe(probe_cases(cfg, [4])[0], 1000, 3)
+    both = ComponentSplitStep(model, exact_kinetic=False, exact_local=False, gauge="zero_mode")
+    torch.testing.assert_close(both(*inputs, cfg.dt), model(*inputs, cfg.dt), atol=1e-12, rtol=1e-12)
+    parameters = torch.stack(inputs[2:], -1)
+    assert model.kinetic(parameters)[:, 0].abs().min() > 0  # the gauge move is not vacuous
+
+
+def test_gauged_swaps_move_the_offset_and_keep_structure():
+    cfg = replace(DataConfig(), grid_size=16, initial_bandwidth=4)
+    model = _random_c1(cfg)
+    x, potential, alpha, beta = inputs = sample_probe(probe_cases(cfg, [4])[0], 1000, 3)[0]
+    models = component_models(model, gauge=True)
+    assert set(GAUGED_MODEL_NAMES) <= set(models)
+    parameters = torch.stack((alpha, beta), -1)
+    offset = model.kinetic(parameters)[:, :1]
+    mid = models["exact_split"]._kinetic_half(x, parameters, cfg.dt)
+    assert torch.allclose(models["exactK_learnedL_g"].local_phase(mid, potential, alpha, beta),
+                          model.local_phase(mid, potential, alpha, beta) + offset, atol=1e-13)
+    # The reverse swap drops the k=0 rate, so the zero mode is untouched by the kinetic half.
+    constant = torch.ones_like(x)
+    assert torch.allclose(models["learnedK_exactL_g"]._kinetic_half(constant, parameters, cfg.dt),
+                          constant, atol=1e-13)
+    for name in GAUGED_MODEL_NAMES:
+        out = models[name](*inputs, cfg.dt)
+        assert torch.allclose(out.abs().square().sum(-1), x.abs().square().sum(-1), rtol=1e-13)
+        rotated = models[name](x * np.exp(.4j), potential, alpha, beta, cfg.dt)
+        assert torch.allclose(rotated, out * np.exp(.4j), atol=1e-13)
+
+
+def test_local_law_recovers_the_exact_rate():
+    cfg = replace(DataConfig(), grid_size=16, initial_bandwidth=4)
+    exact = DensityPhaseSplitStep(cfg.domain, kinetic_mode="K2", local_mode="L2", width=4).double()
+    inputs, _ = sample_probe(probe_cases(cfg, [4])[0], 1000, 8)
+    law = local_law(exact, inputs)
+    for key, target in zip(("beta_rho", "potential", "intercept", "alpha"), law["truth"]):
+        assert abs(law[key] - target) < 1e-10
+    assert law["relative_rmse_vs_truth"] < 1e-12
+    profile = delta_q_profile(exact, inputs[0].abs().square().numpy())
+    assert max(abs(f["slope"]) + abs(f["offset"]) for f in profile["fits"]) < 1e-10
+
+
+def test_local_law_and_drift_predictor_detect_a_known_bias():
+    cfg = replace(DataConfig(), grid_size=16, initial_bandwidth=4)
+    model = DensityPhaseSplitStep(cfg.domain, kinetic_mode="K2", local_mode="L2", width=4).double()
+    with torch.no_grad():
+        model.local.network.network[-1].bias.fill_(.1)  # delta q = +0.1 everywhere
+    inputs, _ = sample_probe(probe_cases(cfg, [4])[0], 1000, 4)
+    assert abs(local_law(model, inputs)["intercept"] - .1) < 1e-10
+    drift = predicted_phase_drift(model, inputs, cfg.dt, steps=20, reference_substeps=8)
+    for stats in drift["stats"].values():
+        assert abs(stats["slope"] - 1) < 1e-2 and stats["corr"] > .999
