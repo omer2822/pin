@@ -172,6 +172,187 @@ def make_comparison_plots(payload: dict, output) -> None:
         writer.writerows(rows)
 
 
+PROBE_COLUMNS = ("arm", "lambda", "seeds", "one_step", "distance_to_cn", "rollout", "aligned",
+                 "global_phase", "energy_drift_final", "energy_slope", "energy_trend",
+                 "mass_drift_final", "diverged_seeds")
+_NAN = float("nan")
+
+
+def _median(values) -> float:
+    finite = [v for v in values if v is not None and math.isfinite(v)]
+    return statistics.median(finite) if finite else _NAN
+
+
+def _probe_values(measured: dict) -> dict:
+    """Last-checkpoint rollout values and final-step invariants for one seed or reference."""
+
+    rollout, long = measured["rollout"], measured["long_horizon"]
+    finished = rollout["diverged_at"] is None and bool(rollout["steps"])
+    last = lambda key: rollout[key][-1] if finished else _NAN
+    values = {"distance_to_cn": measured["distance_to_cn"], "rollout": last("relative_error"),
+              "aligned": last("aligned_error"), "global_phase": last("global_phase"),
+              "energy_drift_final": _NAN, "mass_drift_final": _NAN, "energy_slope": _NAN,
+              "energy_trend": "", "diverged": not finished}
+    if long is not None:
+        complete = (long["diverged_at"] is None and bool(long["steps"])
+                    and long["steps"][-1] == long["requested_steps"])
+        values.update(energy_slope=long["energy_trend"]["slope"],
+                      energy_trend=long["energy_trend"]["classification"],
+                      diverged=values["diverged"] or not complete)
+        if complete:
+            values.update(energy_drift_final=long["energy_drift"][-1],
+                          mass_drift_final=long["mass_drift"][-1])
+    return values
+
+
+def probe_summary_rows(payload: dict) -> list[dict]:
+    """One row per reference operator and per (arm, lambda); seed medians for arms."""
+
+    numeric = ("distance_to_cn", "rollout", "aligned", "global_phase", "energy_drift_final",
+               "energy_slope", "mass_drift_final")
+    rows = []
+    for name, measured in payload["references"].items():
+        values = _probe_values(measured)
+        rows.append({"arm": name, "lambda": "", "seeds": "reference", "one_step": measured["one_step"],
+                     "energy_trend": values["energy_trend"], "diverged_seeds": int(values["diverged"]),
+                     **{key: values[key] for key in numeric}})
+    for entry in payload["arms"]:
+        per_seed = [_probe_values(m) for m in entry["per_seed"].values()]
+        trends = [v["energy_trend"] for v in per_seed if v["energy_trend"]]
+        rows.append({"arm": entry["arm"], "lambda": entry["lambda"], "seeds": len(per_seed),
+                     "one_step": "", "diverged_seeds": sum(v["diverged"] for v in per_seed),
+                     "energy_trend": ", ".join(f"{t}×{trends.count(t)}" for t in sorted(set(trends))),
+                     **{key: _median(v[key] for v in per_seed) for key in numeric}})
+    return rows
+
+
+def probe_table_html(payload: dict) -> str:
+    import html
+
+    def cell(value):
+        if isinstance(value, float):
+            return "—" if math.isnan(value) else f"{value:.3e}"
+        return str(value)
+
+    header = "".join(f"<th>{html.escape(c)}</th>" for c in PROBE_COLUMNS)
+    body = "".join("<tr>" + "".join(f"<td>{html.escape(cell(row[c]))}</td>" for c in PROBE_COLUMNS)
+                   + "</tr>" for row in probe_summary_rows(payload))
+    settings = payload["settings"]
+    caption = (f"distance_to_cn: one-step relative L2 to the exact CN step, first "
+               f"{settings['cn_trajectories']} test trajectories. rollout / aligned / global_phase "
+               f"(rad) at step {settings['checkpoints'][-1]}. Invariants at step "
+               f"{settings['long_steps']} over {settings['long_batch']} initial conditions, only "
+               f"for lambda in {settings['long_lambdas']}. Arms show seed medians; diverged seeds "
+               "are excluded and counted.")
+    return f"<p>{html.escape(caption)}</p><table><tr>{header}</tr>{body}</table>"
+
+
+def make_probe_plots(payload: dict, output) -> None:
+    """Distance to CN against lambda, long-horizon invariants, raw vs aligned rollout."""
+
+    floor = 1e-17  # exact conservation has no log; draw it at the floor
+    status = "EXPLORATORY" if payload["exploratory"] else "converged checkpoints"
+    colours = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    arms = payload["arms"]
+    references = payload["references"]
+    styles = {"CN exact": ("black", "--"), "Strang 1-step": ("0.45", ":")}
+    colour_of = {f"{e['arm']}|{e['lambda']:g}": colours[i % len(colours)] for i, e in enumerate(arms)}
+
+    # 1. Does a larger lambda move the model toward the CN step?
+    figure, axis = plt.subplots(figsize=(8, 5))
+    weights = sorted({e["lambda"] for e in arms})
+    for index, family in enumerate(sorted({e["family"] for e in arms})):
+        entries = {e["lambda"]: e for e in arms if e["family"] == family}
+        xs = [weights.index(w) for w in weights if w in entries]
+        medians = [_median(m["distance_to_cn"] for m in entries[w]["per_seed"].values())
+                   for w in weights if w in entries]
+        colour = colours[index % len(colours)]
+        axis.plot(xs, medians, color=colour, marker="o", label=f"{family} / {family}+PDE (median)")
+        for w in entries:
+            values = [m["distance_to_cn"] for m in entries[w]["per_seed"].values()]
+            axis.plot([weights.index(w)] * len(values), values, ".", color=colour, alpha=.5)
+    axis.axhline(references["CN exact"]["one_step"], color="black", ls="--",
+                 label="substepped truth (= CN one-step error)")
+    axis.axhline(references["Strang 1-step"]["distance_to_cn"], color="0.45", ls=":",
+                 label="Strang 1-step")
+    axis.set_xticks(range(len(weights)), [f"{w:g}" for w in weights])
+    axis.set_yscale("log")
+    axis.set_xlabel("PDE weight lambda")
+    axis.set_ylabel("one-step relative L2 to the exact CN step")
+    axis.set_title(f"Does the residual pull toward CN dynamics? — {status}")
+    axis.grid(True, which="both", alpha=.3)
+    axis.legend(fontsize=8)
+    figure.tight_layout()
+    figure.savefig(output / "plots" / "phase7_toward_cn.png", dpi=150)
+    plt.close(figure)
+
+    # 2. Long-horizon invariants, one line per seed.
+    figure, axes = plt.subplots(1, 2, figsize=(14, 5.2))
+    for axis, key, title in zip(axes, ("energy_drift", "mass_drift"), ("Energy drift", "Mass drift")):
+        for entry in arms:
+            colour = colour_of[f"{entry['arm']}|{entry['lambda']:g}"]
+            longs = [m["long_horizon"] for m in entry["per_seed"].values() if m["long_horizon"]]
+            for number, long in enumerate(longs):
+                axis.plot(long["steps"], [max(v, floor) for v in long[key]], color=colour, lw=1.2,
+                          alpha=.75, label=f"{entry['arm']} λ={entry['lambda']:g}" if number == 0 else None)
+                if long["diverged_at"] is not None and long["steps"]:
+                    axis.plot(long["steps"][-1], max(long[key][-1], floor), "x", color=colour)
+        for name, measured in references.items():
+            colour, dash = styles.get(name, ("0.3", "-."))
+            long = measured["long_horizon"]
+            axis.plot(long["steps"], [max(v, floor) for v in long[key]], color=colour, ls=dash,
+                      lw=1.6, label=name)
+        horizon = payload["settings"]["checkpoints"][-1]
+        axis.axvline(horizon, color="0.6", lw=.8)
+        axis.text(horizon, 1, " stored frames end", fontsize=7, color="0.4",
+                  transform=axis.get_xaxis_transform(), va="top")
+        axis.set_xscale("log")
+        axis.set_yscale("log")
+        axis.set_xlabel("step")
+        axis.set_title(f"{title} (one line per seed; × = diverged)")
+        axis.grid(True, which="both", alpha=.3)
+    axes[0].legend(fontsize=7, ncol=2)
+    figure.suptitle(f"Phase 7 probes: long-horizon invariants, float64 — {status}")
+    figure.tight_layout(rect=(0, 0, 1, .94))
+    figure.savefig(output / "plots" / "phase7_long_horizon.png", dpi=150)
+    plt.close(figure)
+
+    # 3. How much of the rollout error is a global phase?
+    def median_curve(measurements, key):
+        steps = payload["settings"]["checkpoints"]
+        curves = [dict(zip(m["rollout"]["steps"], m["rollout"][key])) for m in measurements]
+        return steps, [_median(c.get(s, _NAN) for c in curves) for s in steps]
+
+    figure, axes = plt.subplots(1, 2, figsize=(14, 5.2))
+    series = [(f"{e['arm']} λ={e['lambda']:g}", list(e["per_seed"].values()),
+               colour_of[f"{e['arm']}|{e['lambda']:g}"], "-") for e in arms]
+    series += [(name, [m], *styles.get(name, ("0.3", "-."))) for name, m in references.items()]
+    for label, measurements, colour, dash in series:
+        steps, raw = median_curve(measurements, "relative_error")
+        _, aligned = median_curve(measurements, "aligned_error")
+        _, phase = median_curve(measurements, "global_phase")
+        axes[0].plot(steps, raw, color=colour, ls=dash, lw=1, alpha=.45)
+        axes[0].plot(steps, aligned, color=colour, ls=dash, lw=1.8, marker="o", ms=3, label=label)
+        axes[1].plot(steps, phase, color=colour, ls=dash, lw=1.6, marker="o", ms=3, label=label)
+    axes[0].set_title("Rollout relative L2: aligned (bold) vs raw (faint), seed median")
+    axes[1].set_title("Mean |global phase| (rad), seed median")
+    for axis in axes:
+        axis.set_xscale("log")
+        axis.set_yscale("log")
+        axis.set_xlabel("step")
+        axis.grid(True, which="both", alpha=.3)
+    axes[1].legend(fontsize=7, ncol=2)
+    figure.suptitle(f"Phase 7 probes: how much rollout error is global phase — {status}")
+    figure.tight_layout(rect=(0, 0, 1, .94))
+    figure.savefig(output / "plots" / "phase7_phase_aligned.png", dpi=150)
+    plt.close(figure)
+
+    with (output / "probes.csv").open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(PROBE_COLUMNS))
+        writer.writeheader()
+        writer.writerows(probe_summary_rows(payload))
+
+
 def make_plots(payload: dict, output) -> None:
     """One figure: error, mass drift and energy drift against lambda on a log axis."""
 

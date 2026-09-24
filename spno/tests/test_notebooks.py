@@ -32,7 +32,7 @@ def test_notebook_executes_end_to_end_without_training(filename, standalone, tmp
                                    'allow_budget_bound': True, 'fractions': [1.0],
                                    'source_search_roots': [str(root.parent)],
                                    'sigmas': [0.0], 'gammas': [0.0], 'grid': 16, 'noise': [0.0],
-                                   'refinements': [3, 6]})}.items():
+                                   'refinements': [3, 6], 'long_steps': 30, 'long_batch': 2})}.items():
         monkeypatch.setenv(name, value)
     if filename == '07_pino_evaluation.ipynb':
         # Reproduce a fresh Colab runtime: artifacts exist under a transferred
@@ -57,6 +57,13 @@ def test_notebook_executes_end_to_end_without_training(filename, standalone, tmp
         html = ''.join(o.get('data', {}).get('text/html', '') for c in executed.cells
                        if c.cell_type == 'code' for o in c.outputs)
         assert all(label in html for label in ('A+PDE', 'B-loop', 'C1+PDE'))
+        probes = next((tmp_path / 'output' / 'reports').glob('phase7-probes-*/probes.csv'))
+        with probes.open() as handle:
+            probe_rows = list(csv.DictReader(handle))
+        assert {row['arm'] for row in probe_rows} == {'CN exact', 'Strang 1-step', 'A', 'A+PDE',
+                                                     'B-loop', 'C1', 'C1+PDE'}
+        assert {p.name for p in probes.parent.glob('plots/*.png')} == {
+            'phase7_toward_cn.png', 'phase7_long_horizon.png', 'phase7_phase_aligned.png'}
 
 
 def test_phase6_evaluation_notebook_runs_arms_incrementally(budget_bound_standalone, tmp_path, monkeypatch):

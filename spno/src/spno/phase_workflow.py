@@ -205,6 +205,111 @@ def evaluate_phase(workflow: Workflow, phase: int, *, seeds=None, device='cpu',
     return payload
 
 
+def probe_phase7(workflow: Workflow, jobs, *, long_lambdas=(0., .01), long_steps=5000, long_batch=32,
+                 n_rollout=100, cn_trajectories=16, allow_budget_bound=False, verbose=True):
+    """Phase 7 follow-up probes on existing checkpoints; nothing is trained.
+
+    Every job gets its one-step distance to the exact CN step and a phase-aligned
+    rollout against the stored test frames (both cheap).  Jobs whose lambda is in
+    ``long_lambdas`` also get a ``long_steps`` invariant-only rollout.  The CN oracle
+    and a single Strang step are measured the same way as reference lines.  Everything
+    is float64 on CPU.  Writes its own report, named by the probe settings and
+    checkpoint hashes, so it never alters the Phase 7 comparison it follows.
+    """
+    import time
+    import torch
+    from scripts import run_phase7 as runner
+    from .evaluation.phase7_probes import (CrankNicolsonStep, aligned_rollout,
+                                           long_horizon_invariants, reference_one_step)
+    from .experiments import rollout_inputs
+    from .precision import widen_to_double
+    from .solvers.split_step import SplitStepNLSOperator
+
+    if not jobs:
+        raise ValueError('No Phase 7 jobs to probe')
+    long_wanted = {float(w) for w in long_lambdas}
+    data, domain = workflow.data_config, workflow.data_config.domain
+    test = workflow.shards(jobs[0])['test']
+    inputs = rollout_inputs(test, data, 'cpu', n=n_rollout, dtype=torch.complex128)
+    long_inputs = {k: v[:long_batch] for k, v in inputs.items() if k != 'trajectories'}
+    checkpoints = tuple(s for s in (1, 10, 20, 50, 100, 200) if s <= data.steps)
+    settings = {'long_lambdas': sorted(long_wanted), 'long_steps': long_steps,
+                'long_batch': long_batch, 'n_rollout': n_rollout,
+                'cn_trajectories': cn_trajectories, 'checkpoints': list(checkpoints),
+                'allow_budget_bound': allow_budget_bound}
+    oracle = CrankNicolsonStep(domain)
+    parameters = (test.potential.double(), test.alpha.double(), test.beta.double(), data.dt)
+    subset = test.trajectories[:cn_trajectories].to(torch.complex128)
+
+    def probe(model, *, long_horizon):
+        # Distance to the exact CN step on the same inputs: whether a larger lambda
+        # actually moves the model toward CN, not merely away from the data.
+        measured = {
+            'distance_to_cn': reference_one_step(model, domain, subset, *parameters,
+                                                 chunk=4, against=oracle),
+            'rollout': aligned_rollout(model, domain, inputs['initial'], inputs['trajectories'],
+                                       inputs['potential'], inputs['alpha'], inputs['beta'],
+                                       data.dt, checkpoints=checkpoints),
+            'long_horizon': None}
+        if long_horizon:
+            measured['long_horizon'] = long_horizon_invariants(
+                model, domain, long_inputs['initial'], long_inputs['potential'],
+                long_inputs['alpha'], long_inputs['beta'], data.dt, steps=long_steps)
+        return measured
+
+    def log(message):
+        if verbose:
+            print(message, flush=True)
+
+    references = {}
+    full = test.trajectories.to(torch.complex128)
+    for name, operator in (('CN exact', oracle), ('Strang 1-step', SplitStepNLSOperator(domain))):
+        start = time.time()
+        references[name] = {'one_step': reference_one_step(operator, domain, full, *parameters),
+                            **probe(operator, long_horizon=True)}
+        log(f'{name}: one-step {references[name]["one_step"]:.3e}, distance to CN '
+            f'{references[name]["distance_to_cn"]:.3e} ({time.time() - start:.0f}s)')
+
+    sources, arms = {}, {}
+    for job in jobs:
+        model, record = workflow.restore(job, allow_budget_bound=allow_budget_bound)
+        sources[job.identifier] = {'sha256': record['sha256'], 'converged': record['converged'],
+                                   'source': record['source']}
+        arm = job.name if job.physics_weight == 0 else f'{job.name}+PDE'
+        start = time.time()
+        measured = probe(widen_to_double(model, device='cpu').eval(),
+                         long_horizon=job.physics_weight in long_wanted)
+        arms.setdefault(f'{arm}|{job.physics_weight:g}', {
+            'arm': arm, 'family': job.name, 'lambda': job.physics_weight,
+            'per_seed': {}})['per_seed'][str(job.seed)] = measured
+        long = measured['long_horizon']
+        log(f'{arm} lambda={job.physics_weight:g} seed={job.seed}: distance to CN '
+            f'{measured["distance_to_cn"]:.3e}'
+            + (f', long-horizon diverged_at={long["diverged_at"]}' if long else '')
+            + f' ({time.time() - start:.0f}s)')
+
+    exploratory = workflow.quick or not all(s['converged'] for s in sources.values())
+    identifier = 'phase7-probes-' + stable_hash({
+        'settings': settings, 'checkpoints': sources, 'test': workflow._digest(jobs[0].paths['test'])})
+    if exploratory and not workflow.quick:
+        identifier += '-budget-bound'
+    payload = {'phase': 7, 'variant': '7a-probes', 'identifier': identifier,
+               'data_hash': config_hash(data), 'settings': settings, 'exploratory': exploratory,
+               'checkpoint_sources': sources, 'references': references,
+               'arms': list(arms.values()),
+               'note': ('float64 on CPU. distance_to_cn uses the first cn_trajectories test '
+                        'trajectories; the aligned rollout uses the same n_rollout samples as the '
+                        'Phase 7 table; long-horizon drift uses the first long_batch initial '
+                        'conditions, with trends fitted beyond fit_from steps. The exact CN step '
+                        'conserves discrete mass AND energy, so the residual pulls toward both.')}
+    output = workflow.output_root / 'reports' / identifier
+    (output / 'plots').mkdir(parents=True, exist_ok=True)
+    atomic_json(output / 'metrics.json', payload)
+    runner.make_probe_plots(payload, output)
+    payload['output'] = str(output)
+    return payload
+
+
 def add_workflow_arguments(parser):
     parser.add_argument('--stage', choices=('prepare', 'train', 'evaluate'), default=None,
                         help='explicit checkpoint workflow; omitted preserves legacy behavior')
