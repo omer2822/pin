@@ -9,11 +9,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from scripts.run_hybrid_ablation import read_unit
-from spno.evaluation.component_ablation import MODEL_NAMES
+from spno.evaluation.component_ablation import MODEL_NAMES as BASE_MODELS
 
 LABELS = {"C1": "Full C1", "exactK_learnedL": "Exact kinetic + learned local",
-          "learnedK_exactL": "Learned kinetic + exact local", "exact_split": "Exact split step"}
-COLORS = {"C1": "#bf4b45", "exactK_learnedL": "#21866c", "learnedK_exactL": "#7655a4", "exact_split": "#252b33"}
+          "learnedK_exactL": "Learned kinetic + exact local", "exact_split": "Exact split step",
+          "exactK_learnedL_g": "Exact kinetic + learned local (gauge-fixed)",
+          "learnedK_exactL_g": "Learned kinetic + exact local (gauge-fixed)"}
+COLORS = {"C1": "#bf4b45", "exactK_learnedL": "#21866c", "learnedK_exactL": "#7655a4", "exact_split": "#252b33",
+          "exactK_learnedL_g": "#7fcfb4", "learnedK_exactL_g": "#b9a3dc"}
 PANEL_METRICS = ("state_error", "phase_rms", "spectrum_error", "mass_drift", "energy_drift", "aligned_state_error")
 
 
@@ -22,6 +25,8 @@ def export_plots(root):
     manifest = json.loads((root / "manifest.json").read_text())
     summary = json.loads((root / "summary.json").read_text())
     options = manifest["options"]
+    MODEL_NAMES = tuple(manifest.get("models", BASE_MODELS))
+    family = "/".join(manifest.get("checkpoint_family", ["C1"]))
     figures = root / "figures"
     figures.mkdir(exist_ok=True)
     status = "SMOKE" if options["smoke"] else ("EXPLORATORY / budget-bound" if manifest["exploratory"] else "Frozen checkpoint study")
@@ -36,7 +41,8 @@ def export_plots(root):
         plt.close(fig)
 
     # Main question first: paired hybrid/C1 improvement on every random-field arm.
-    chosen = [r for r in summary["paired"] if r["endpoint"] == "final" and r["metric"] == "state_error"]
+    chosen = [r for r in summary["paired"] if r["endpoint"] == "final" and r["metric"] == "state_error"
+              and r.get("model", "exactK_learnedL") == "exactK_learnedL" and r.get("baseline", "C1") == "C1"]
     if chosen:
         fig, ax = plt.subplots(figsize=(10, max(5, len(chosen)*.29)), layout="constrained")
         labels = []
@@ -169,11 +175,47 @@ def export_plots(root):
             fig.suptitle(f"{name} / {cohort}: full spectra, spectral error, and cascade")
             save(fig, f"spectrum_{name}_{cohort}")
 
+    exported += reciprocal_figure(root, manifest, summary, save, MODEL_NAMES, family)
     for filename, rows in (("metrics", summary["rows"]), ("paired_comparisons", summary["paired"]),
                            ("reference_checks", summary["reference_checks"])):
         if rows:
             with (root / f"{filename}.csv").open("w", newline="") as stream:
-                writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+                fields = list(dict.fromkeys(key for row in rows for key in row))
+                writer = csv.DictWriter(stream, fieldnames=fields)
                 writer.writeheader()
                 writer.writerows({k: json.dumps(v) if isinstance(v, (list, dict)) else v for k, v in row.items()} for row in rows)
     return exported
+
+
+def reciprocal_figure(root, manifest, summary, save, models, family):
+    """Exp 1: every swap per case, raw and phase-aligned final error side by side.
+
+    Reading it: a component is implicated on an axis when the swap that *keeps* it
+    learned fails there while the swap that replaces it does not. Spectral cases (G4)
+    stressing K and beta/V cases (G2, G3) stressing L would give a double dissociation.
+    """
+    order = [c["name"] for c in manifest["cases"] if not c["name"].startswith(("G6", "G7", "G8", "G9"))]
+    if not order:
+        return []
+    fig, axs = plt.subplots(2, 1, figsize=(max(10, len(order) * .8), 9), layout="constrained", sharex=True)
+    width = .8 / len(models)
+    for ax, metric in zip(axs, ("state_error", "aligned_state_error")):
+        for j, model in enumerate(models):
+            entries = [next((r for r in summary["rows"] if r["case"] == name and r["cohort"] == "base"
+                             and r["model"] == model and r["metric"] == metric and r["endpoint"] == "final"), None)
+                       for name in order]
+            xs = np.arange(len(order)) + (j - (len(models) - 1) / 2) * width
+            means = np.asarray([np.nan if e is None else e["mean"] for e in entries], dtype=float)
+            lows = np.asarray([np.nan if e is None else e["min"] for e in entries], dtype=float)
+            highs = np.asarray([np.nan if e is None else e["max"] for e in entries], dtype=float)
+            ax.errorbar(xs, np.maximum(means, 1e-16),
+                        yerr=[np.maximum(means - lows, 0), np.maximum(highs - means, 0)],
+                        fmt="o", ms=4, color=COLORS[model], label=LABELS[model], capsize=2)
+        ax.set(yscale="log", ylabel=f"Final {metric.replace('_', ' ')}")
+        ax.grid(axis="y", alpha=.2)
+    axs[1].set_xticks(range(len(order)), order, rotation=35, ha="right")
+    axs[0].legend(fontsize=7, ncol=2)
+    fig.suptitle(f"Reciprocal component ablation ({family}): which learned half fails on which axis?\n"
+                 "Markers: mean over training × probe seeds × ICs; bars: min–max of those values")
+    save(fig, "07_reciprocal_ablation")
+    return [root / "figures" / "07_reciprocal_ablation.png"]

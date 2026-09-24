@@ -253,3 +253,83 @@ def test_local_law_and_drift_predictor_detect_a_known_bias():
     drift = predicted_phase_drift(model, inputs, cfg.dt, steps=20, reference_substeps=8)
     for stats in drift["stats"].values():
         assert abs(stats["slope"] - 1) < 1e-2 and stats["corr"] > .999
+
+
+GAUGE_CASES = ["G1-interpolation", "G2-extrapolation", "G3-potential-strong", "G4-bandwidth-2", "G6a-multidt-1"]
+
+
+def test_gauge_run_saves_every_swap_all_pairs_and_the_reciprocal_figure(hybrid_source, tmp_path):
+    from scripts.plot_hybrid_ablation import export_plots
+    source, cfg = hybrid_source
+    options = {**small_options(), "gauge": True, "case_names": GAUGE_CASES}
+    run = run_study(source, tmp_path / "output", data=cfg, options=options)
+    manifest = json.loads((run / "manifest.json").read_text())
+    assert set(GAUGED_MODEL_NAMES) <= set(manifest["models"])
+    unit = read_unit(next((run / "cases").rglob("base-0.json.gz")))
+    assert set(unit["by_model"]) == set(manifest["models"])
+    summary = json.loads((run / "summary.json").read_text())
+    pairs = {(r["model"], r["baseline"]) for r in summary["paired"]}
+    assert ("exactK_learnedL", "learnedK_exactL") in pairs and ("learnedK_exactL_g", "C1") in pairs
+    legacy = [r for r in summary["paired"] if "hybrid_over_C1" in r]
+    assert legacy and all((r["model"], r["baseline"]) == ("exactK_learnedL", "C1") for r in legacy)
+    figures = export_plots(run)
+    assert run / "figures" / "07_reciprocal_ablation.png" in figures
+
+
+def test_resummarize_keeps_run_identity_and_adds_reciprocal_pairs(hybrid_source, tmp_path):
+    from scripts.run_hybrid_ablation import resummarize
+    source, cfg = hybrid_source
+    run = run_study(source, tmp_path / "output", data=cfg,
+                    options={**small_options(), "case_names": GAUGE_CASES[:2]})
+    manifest = json.loads((run / "manifest.json").read_text())
+    del manifest["models"]  # a pre-gauge manifest, like Drive run 3bf81deae4ef1ff9
+    (run / "manifest.json").write_text(json.dumps(manifest))
+    old = json.loads((run / "summary.json").read_text())
+    summary = resummarize(run)
+    assert json.loads((run / "summary.v1.json").read_text()) == old
+    assert {(r["model"], r["baseline"]) for r in summary["paired"]} == {
+        ("exactK_learnedL", "C1"), ("learnedK_exactL", "C1"), ("exactK_learnedL", "learnedK_exactL")}
+    assert sorted(run.parent.iterdir()) == [run]
+    assert summary["rows"] == old["rows"]
+
+
+def test_substituted_c1g_cohort_runs_base_rows_and_gauged_swaps_are_identities(hybrid_source, tmp_path):
+    source, cfg = hybrid_source
+    models = {}
+    for seed in (0, 1):
+        torch.manual_seed(seed)
+        models[seed] = DensityPhaseSplitStep(cfg.domain, width=4, kinetic_gauge="zero_mode").double().eval()
+    provenance = [{"name": "C1g", "seed": s, "sha256": "test", "metadata": {"converged": False}, "quick": True}
+                  for s in (0, 1)]
+    options = {**small_options(), "gauge": True, "case_names": GAUGE_CASES}
+    run = run_study(source, tmp_path / "output", data=cfg, options=options,
+                    cohorts=({"base": models}, provenance))
+    manifest = json.loads((run / "manifest.json").read_text())
+    assert manifest["checkpoint_family"] == ["C1g"]
+    assert all(c["cohorts"] == ["base"] for c in manifest["cases"])
+    for path in (run / "cases").rglob("base-*.json.gz"):
+        by_model = read_unit(path)["by_model"]
+        # kappa(0) = 0 already, so the gauge move changes nothing.
+        for name in GAUGED_MODEL_NAMES:
+            ungauged = by_model[name[:-2]]["records"][-1]["state_error"]
+            assert np.allclose(by_model[name]["records"][-1]["state_error"], ungauged, rtol=1e-10, atol=1e-14)
+
+
+def test_load_c1g_cohort_reads_workflow_records(tmp_path):
+    from spno.artifacts import file_digest
+    from spno.workflow import stable_hash
+    from scripts.run_hybrid_ablation import load_c1g_cohort
+    cfg = replace(DataConfig(), grid_size=8, initial_bandwidth=2)
+    architecture = {"kinetic_mode": "K0", "local_mode": "L0", "width": 4, "kinetic_gauge": "zero_mode"}
+    for seed, weight in ((0, 0.), (0, .01), (1, 0.)):
+        spec = {"name": "C1g", "seed": seed, "physics_weight": weight, "data_hash": config_hash(cfg), "quick": False}
+        folder = tmp_path / "experiments" / stable_hash(spec)
+        model = DensityPhaseSplitStep(cfg.domain, width=4, kinetic_gauge="zero_mode")
+        meta = CheckpointMetadata(1, "C1g", config_hash(cfg), seed, "one-step", None, cfg.dt, architecture, False, 0)
+        save_checkpoint(folder / "model.pt", model, meta)
+        (folder / "record.json").write_text(json.dumps({"spec": spec, "sha256": file_digest(folder / "model.pt")}))
+    cohorts, provenance = load_c1g_cohort(tmp_path, cfg, [0, 1])
+    assert set(cohorts["base"]) == {0, 1} and [p["seed"] for p in provenance] == [0, 1]
+    assert all(m.kinetic.gauge == "zero_mode" for m in cohorts["base"].values())
+    with pytest.raises(ValueError, match="missing for seeds \\[2\\]"):
+        load_c1g_cohort(tmp_path, cfg, [0, 2])

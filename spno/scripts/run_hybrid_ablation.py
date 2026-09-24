@@ -17,7 +17,7 @@ from spno.artifacts import atomic_json, file_digest
 from spno.checkpoints import load_checkpoint_payload
 from spno.config import DataConfig, config_hash
 from spno.evaluation.component_ablation import (
-    MODEL_NAMES, METRICS, component_models, crossed_interval, kinetic_dispersion,
+    GAUGED_MODEL_NAMES, MODEL_NAMES, METRICS, component_models, crossed_interval, kinetic_dispersion,
     measure_rollout, probe_cases, reference_frames, sample_probe,
 )
 from spno.precision import widen_to_double
@@ -32,8 +32,21 @@ DEFAULTS = {
     "spatial_samples": 2, "spatial_tolerance": 1e-3,
     "tail_threshold": 1e-6, "device": "cpu", "threads": 2,
     "allow_budget_bound": True, "bootstrap_draws": 2000,
-    "case_names": None, "smoke": False,
+    "case_names": None, "smoke": False, "gauge": False,
 }
+
+#: Paired contrasts, (model, baseline). The first is the original hybrid-vs-C1 question;
+#: the others are the reciprocal swap. Gauged pairs are added when the run has them.
+PAIRS = (("exactK_learnedL", "C1"), ("learnedK_exactL", "C1"),
+         ("exactK_learnedL", "learnedK_exactL"))
+GAUGED_PAIRS = (("exactK_learnedL_g", "C1"), ("learnedK_exactL_g", "C1"),
+                ("exactK_learnedL_g", "learnedK_exactL_g"))
+
+#: Exp 1 selection for new rollouts: the spectral axis (stresses K), beta/alpha and V
+#: shifts (stress L), and the in-distribution control.
+RECIPROCAL_CASES = ("G1-interpolation", "G2-extrapolation", "G3-potential-strong",
+                    "G3-potential-short", "G4-bandwidth-4", "G4-bandwidth-8",
+                    "G4-bandwidth-12", "G4-bandwidth-16", "G4-bandwidth-24")
 
 
 def clean_json(value):
@@ -113,6 +126,38 @@ def load_c1_cohorts(source_root, data, seeds, *, allow_budget_bound):
     return data, models, provenance
 
 
+def load_c1g_cohort(workflow_root, data, seeds):
+    """C1g lambda=0 checkpoints trained by the Phase 7 workflow, as a base cohort."""
+    from spno.workflow import stable_hash
+    records = {}
+    for path in sorted(Path(workflow_root).glob("experiments/*/record.json")):
+        record = json.loads(path.read_text())
+        spec = record["spec"]
+        if spec["name"] != "C1g" or spec["physics_weight"] != 0 or spec["seed"] not in seeds:
+            continue
+        if stable_hash(spec) != path.parent.name:
+            raise RuntimeError(f"Record identity mismatch: {path}")
+        if spec["data_hash"] != config_hash(data):
+            raise ValueError(f"C1g seed {spec['seed']} was trained on other data")
+        if spec["seed"] in records:
+            raise ValueError(f"Ambiguous C1g checkpoints for seed {spec['seed']}; select one workflow")
+        records[spec["seed"]] = (path.parent / "model.pt", record)
+    missing = sorted(set(seeds) - set(records))
+    if missing:
+        raise ValueError(f"C1g checkpoints missing for seeds {missing}; train them in 00_training")
+    models, provenance = {}, []
+    for seed, (path, record) in sorted(records.items()):
+        if file_digest(path) != record["sha256"]:
+            raise RuntimeError(f"Checkpoint corrupt: {path}")
+        payload = load_checkpoint_payload(path)
+        model = _model_from_checkpoint(payload, data, expected_name="C1g")
+        model.load_state_dict(payload.state_dict, strict=True)
+        models[seed] = widen_to_double(model, device="cpu").eval()
+        provenance.append({"name": "C1g", "seed": seed, "sha256": record["sha256"],
+                           "metadata": asdict(payload.metadata), "quick": bool(record["spec"].get("quick"))})
+    return {"base": models}, provenance
+
+
 def prolong(field):
     """Fourier interpolate a complex periodic field from N to 2N."""
     n = field.shape[-1]
@@ -173,7 +218,11 @@ def validate_options(options, data):
         raise ValueError("Use at least 3 seeds on each axis, or mark smoke=True")
 
 
-def run_study(source_root, output_root, *, data=None, options=None):
+def run_study(source_root, output_root, *, data=None, options=None, cohorts=None):
+    """``cohorts=(models, provenance)`` substitutes other C1-family checkpoints (C1g).
+
+    Cases that need a cohort the substitute lacks (G6a, G7) keep only their base rows.
+    """
     options = {**DEFAULTS, **(options or {})}
     unknown = set(options) - set(DEFAULTS)
     if unknown:
@@ -182,10 +231,20 @@ def run_study(source_root, output_root, *, data=None, options=None):
     if output_root.resolve().is_relative_to(source_root.resolve()):
         raise ValueError("Keep outputs separate from source checkpoints")
     torch.set_num_threads(options["threads"])
-    data, cohorts, provenance = load_c1_cohorts(source_root, data, options["training_seeds"],
-                                             allow_budget_bound=options["allow_budget_bound"])
+    if cohorts is None:
+        data, cohorts, provenance = load_c1_cohorts(source_root, data, options["training_seeds"],
+                                                 allow_budget_bound=options["allow_budget_bound"])
+    else:
+        if data is None:
+            raise ValueError("Substituted cohorts need their training DataConfig")
+        cohorts, provenance = cohorts
+        if any(set(models) != set(options["training_seeds"]) for models in cohorts.values()):
+            raise ValueError("Substituted cohorts must cover exactly the training seeds")
     validate_options(options, data)
-    cases = probe_cases(data, options["bandwidths"])
+    model_names = MODEL_NAMES + (GAUGED_MODEL_NAMES if options["gauge"] else ())
+    cases = [replace(c, cohorts=tuple(k for k in c.cohorts if k in cohorts))
+             for c in probe_cases(data, options["bandwidths"])]
+    cases = [c for c in cases if c.cohorts]
     if options["case_names"] is not None:
         known = {c.name for c in cases}
         if set(options["case_names"]) - known:
@@ -201,7 +260,8 @@ def run_study(source_root, output_root, *, data=None, options=None):
     root.mkdir(parents=True, exist_ok=True)
     exploratory = any(not p["metadata"]["converged"] or p["quick"] for p in provenance)
     manifest = {**identity, "run_id": run_id, "exploratory": exploratory,
-                "complete": False, "cases": [asdict(c) for c in cases],
+                "complete": False, "cases": [asdict(c) for c in cases], "models": list(model_names),
+                "checkpoint_family": sorted({p["name"].rsplit("/", 1)[-1] for p in provenance}),
                 "interpretation": "Frozen checkpoint interventions; no hybrid retraining or test-set tuning.",
                 "G8": "New long-rollout/conservation extension authorized by user."}
     atomic_json(root / "manifest.json", manifest)
@@ -213,7 +273,8 @@ def run_study(source_root, output_root, *, data=None, options=None):
                                           replace(data, alpha_range=(.9, .9)) if cohort == "G7-alpha-fixed" else data)
                                           for seed, model in models.items()}
                                     for cohort, models in cohorts.items()})
-    prepared = {cohort: {seed: {name: model.to(options["device"]) for name, model in component_models(c1).items()}
+    prepared = {cohort: {seed: {name: model.to(options["device"])
+                                for name, model in component_models(c1, gauge=options["gauge"]).items()}
                         for seed, c1 in models.items()} for cohort, models in cohorts.items()}
     for case in cases:
         # Fix physical T across G6's different dt values.
@@ -273,8 +334,26 @@ def run_study(source_root, output_root, *, data=None, options=None):
     return root
 
 
+def resummarize(run_root):
+    """Rebuild summary.json from saved units without touching run identity.
+
+    ``run_study`` would hash the current source into a new run_id and start over; this
+    reads the existing manifest instead. A pre-existing summary is kept as summary.v1.json.
+    """
+    root = Path(run_root)
+    manifest = json.loads((root / "manifest.json").read_text())
+    previous, backup = root / "summary.json", root / "summary.v1.json"
+    if previous.exists() and not backup.exists():
+        atomic_json(backup, json.loads(previous.read_text()))
+    summary = summarize(root, manifest)
+    atomic_json(previous, clean_json(summary))
+    return summary
+
+
 def summarize(root, manifest):
     options = manifest["options"]
+    models = tuple(manifest.get("models", MODEL_NAMES))  # pre-gauge manifests: four models
+    pairs = [p for p in PAIRS + GAUGED_PAIRS if set(p) <= set(models)]
     rows, paired, checks = [], [], []
     for case in manifest["cases"]:
         name = case["name"]
@@ -284,7 +363,7 @@ def summarize(root, manifest):
         for cohort in case["cohorts"]:
             units = [[read_unit(root / "cases" / name / f"probe-{p}" / f"{cohort}-{s}.json.gz")
                       for p in options["probe_seeds"]] for s in options["training_seeds"]]
-            for model in MODEL_NAMES:
+            for model in models:
                 for metric in METRICS:
                     for endpoint in (1, -1):
                         def values(u, m):
@@ -299,16 +378,21 @@ def summarize(root, manifest):
                                      "max": float(array.max()), "failed_rollouts": failed,
                                      "per_training_seed": array.mean(axis=(1, 2)).tolist(),
                                      "per_probe_seed": array.mean(axis=(0, 2)).tolist()})
-                        if model == "exactK_learnedL":
-                            baseline = np.asarray([[values(u, "C1") for u in group] for group in units], dtype=float)
+                        for first, second in pairs:
+                            if model != first:
+                                continue
+                            baseline = np.asarray([[values(u, second) for u in group] for group in units], dtype=float)
                             difference = crossed_interval(array - baseline, draws=options["bootstrap_draws"])
                             ratio = crossed_interval(np.log((array + 1e-15) / (baseline + 1e-15)),
                                                      draws=options["bootstrap_draws"])
-                            paired.append({"case": name, "cohort": cohort, "metric": metric,
-                                           "endpoint": "one_step" if endpoint == 1 else "final",
-                                           "hybrid_minus_C1": difference,
-                                           "hybrid_over_C1": {k: math_exp(ratio[k]) for k in ("mean", "low", "high")},
-                                           "status": ratio["status"]})
+                            row = {"case": name, "cohort": cohort, "metric": metric,
+                                   "endpoint": "one_step" if endpoint == 1 else "final",
+                                   "model": first, "baseline": second, "difference": difference,
+                                   "ratio": {k: math_exp(ratio[k]) for k in ("mean", "low", "high")},
+                                   "status": ratio["status"]}
+                            if (first, second) == PAIRS[0]:  # historical keys, read by notebook 11
+                                row["hybrid_minus_C1"], row["hybrid_over_C1"] = difference, row["ratio"]
+                            paired.append(row)
     return {"rows": rows, "paired": paired, "reference_checks": checks,
             "note": "Crossed training/probe bootstrap, ICs resampled within probes; paired 95% intervals are descriptive and not multiplicity-adjusted. Ratios are geometric means with a 1e-15 numerical floor. Exact comparator repetitions across training seeds are duplicates, not additional independent samples."}
 

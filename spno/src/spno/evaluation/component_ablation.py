@@ -260,8 +260,12 @@ def kinetic_dispersion(c1, cfg):
         rho = torch.full((len(alphas), cfg.grid_size), amplitude**2, dtype=torch.float64)
         local = model.local(rho, torch.zeros_like(rho), alphas, parameters[:, 1])
         exact_local = beta * amplitude**2
+        # Gauged swaps: kappa(0) = -omega(0) moves from the kinetic into the local rate.
+        offset = omega[:, :1]
         total = {"C1": omega - local, "exactK_learnedL": exact - local,
-                 "learnedK_exactL": omega - exact_local, "exact_split": exact - exact_local}
+                 "learnedK_exactL": omega - exact_local, "exact_split": exact - exact_local,
+                 "exactK_learnedL_g": exact - local + offset,
+                 "learnedK_exactL_g": omega - offset - exact_local}
         truth = exact - exact_local
         curves.append({"beta": beta, "omega": omega[:, order].tolist(),
                        "omega_centered": (omega - omega[:, :1])[:, order].tolist(),

@@ -346,7 +346,7 @@ def build_notebook():
     print("High-Nyquist-tail flags:", sum(not c["tail_pass"] for c in summary["reference_checks"]))
     print("\\nPaired final-state hybrid / C1 comparisons:")
     for row in summary["paired"]:
-        if row["metric"] == "state_error" and row["endpoint"] == "final":
+        if row["metric"] == "state_error" and row["endpoint"] == "final" and "hybrid_over_C1" in row:
             interval = row["hybrid_over_C1"]
             print(row["case"], row["cohort"], interval, row["status"])
     print("\\nArtifacts:", RUN_ROOT)
