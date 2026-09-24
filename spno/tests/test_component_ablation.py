@@ -315,21 +315,67 @@ def test_substituted_c1g_cohort_runs_base_rows_and_gauged_swaps_are_identities(h
             assert np.allclose(by_model[name]["records"][-1]["state_error"], ungauged, rtol=1e-10, atol=1e-14)
 
 
-def test_load_c1g_cohort_reads_workflow_records(tmp_path):
+def _write_c1g_records(root, cfg, runs):
+    """Workflow-shaped C1g records: experiments/<stable_hash(spec)>/{record.json, model.pt}."""
     from spno.artifacts import file_digest
     from spno.workflow import stable_hash
-    from scripts.run_hybrid_ablation import load_c1g_cohort
-    cfg = replace(DataConfig(), grid_size=8, initial_bandwidth=2)
     architecture = {"kinetic_mode": "K0", "local_mode": "L0", "width": 4, "kinetic_gauge": "zero_mode"}
-    for seed, weight in ((0, 0.), (0, .01), (1, 0.)):
+    for seed, weight in runs:
         spec = {"name": "C1g", "seed": seed, "physics_weight": weight, "data_hash": config_hash(cfg), "quick": False}
-        folder = tmp_path / "experiments" / stable_hash(spec)
+        folder = root / "experiments" / stable_hash(spec)
+        torch.manual_seed(seed)
         model = DensityPhaseSplitStep(cfg.domain, width=4, kinetic_gauge="zero_mode")
         meta = CheckpointMetadata(1, "C1g", config_hash(cfg), seed, "one-step", None, cfg.dt, architecture, False, 0)
         save_checkpoint(folder / "model.pt", model, meta)
         (folder / "record.json").write_text(json.dumps({"spec": spec, "sha256": file_digest(folder / "model.pt")}))
+
+
+def test_load_c1g_cohort_reads_workflow_records(tmp_path):
+    from scripts.run_hybrid_ablation import load_c1g_cohort
+    cfg = replace(DataConfig(), grid_size=8, initial_bandwidth=2)
+    _write_c1g_records(tmp_path, cfg, ((0, 0.), (0, .01), (1, 0.)))
     cohorts, provenance = load_c1g_cohort(tmp_path, cfg, [0, 1])
     assert set(cohorts["base"]) == {0, 1} and [p["seed"] for p in provenance] == [0, 1]
     assert all(m.kinetic.gauge == "zero_mode" for m in cohorts["base"].values())
     with pytest.raises(ValueError, match="missing for seeds \\[2\\]"):
         load_c1g_cohort(tmp_path, cfg, [0, 2])
+
+
+def test_gauge_notebook_executes_every_section(hybrid_source, tmp_path, monkeypatch):
+    nbformat = pytest.importorskip("nbformat")
+    NotebookClient = pytest.importorskip("nbclient").NotebookClient
+    from dataclasses import asdict
+    source, cfg = hybrid_source
+    project = Path(__file__).resolve().parents[1]
+    config_path = tmp_path / "source.json"
+    config_path.write_text(json.dumps({"data": asdict(cfg)}))
+    options = {**small_options(), "gauge": True,
+               "case_names": ["G1-interpolation", "G2-extrapolation", "G3-potential-strong", "G4-bandwidth-2"]}
+    hybrid = run_study(source, tmp_path / "hybrid", data=cfg,
+                       options={**small_options(), "case_names": ["G1-interpolation", "G4-bandwidth-2"]})
+    _write_c1g_records(tmp_path / "workflow", cfg, ((0, 0.), (1, 0.), (0, .01)))
+    for key, value in {"SPNO_PROJECT_ROOT": project, "SPNO_SOURCE_ROOT": source,
+                       "SPNO_SOURCE_CONFIG": config_path, "SPNO_OUTPUT_ROOT": tmp_path / "gauge",
+                       "SPNO_HYBRID_RUN": hybrid, "SPNO_WORKFLOW_ROOT": tmp_path / "workflow",
+                       "SPNO_OPTIONS": json.dumps(options),
+                       "SPNO_PROBE": json.dumps({"batch": 2, "steps": 3, "reference_substeps": 4, "local_law_batch": 8}),
+                       "MPLBACKEND": "Agg", "IPYTHONDIR": tmp_path / "ipython",
+                       "JUPYTER_RUNTIME_DIR": tmp_path / "jupyter"}.items():
+        monkeypatch.setenv(key, str(value))
+    notebook = nbformat.read(project / "notebooks/12_gauge_identifiable_c1.ipynb", as_version=4)
+    nbformat.validate(notebook)
+    notebook.cells.insert(0, nbformat.v4.new_code_cell(
+        "import torch\ndef forbidden(*a, **k): raise AssertionError('Implicit training')\ntorch.optim.AdamW.step=forbidden"))
+    executed = NotebookClient(notebook, timeout=600, kernel_name="python3",
+                              resources={"metadata": {"path": str(project)}}).execute()
+    errors = [o for c in executed.cells if c.cell_type == "code" for o in c.outputs if o.output_type == "error"]
+    assert not errors, errors[0]["evalue"] if errors else None
+    output = tmp_path / "gauge"
+    assert (hybrid / "summary.v1.json").is_file()
+    assert (output / "port_check.json").is_file()
+    laws = json.loads((output / "local_law.json").read_text())["laws"]
+    assert set(laws) == {"C1 raw", "C1 shifted", "C1g"}
+    for family in ("c1", "c1g"):
+        manifests = list((output / family).glob("*/manifest.json"))
+        assert len(manifests) == 1 and json.loads(manifests[0].read_text())["complete"]
+    assert list((output / "c1g").rglob("07_reciprocal_ablation.png"))

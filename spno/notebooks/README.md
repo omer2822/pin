@@ -9,6 +9,7 @@
 | [09_misspecification.ipynb](09_misspecification.ipynb) | Evaluate equation misspecification sweeps with a shared zero-perturbation baseline |
 | [10_dirichlet.ipynb](10_dirichlet.ipynb) | Solve Laplace/Poisson problems on a disk and rectangle, without training |
 | [11_hybrid_kinetic_ablation.ipynb](11_hybrid_kinetic_ablation.ipynb) | Self-contained Colab study of exact kinetic + learned local across G1–G9, paired component ablations, fresh probe seeds, bandwidth sweeps, dispersion, and long rollouts |
+| [12_gauge_identifiable_c1.ipynb](12_gauge_identifiable_c1.ipynb) | Self-contained: reciprocal component ablation (K_exact+L_θ vs K_θ+L_exact), gauge-fixed swaps, the local law L_θ ≈ βρ − V, and the same ablation on C1g |
 
 ## Hybrid follow-up notebook
 
@@ -177,3 +178,23 @@ You may set `SOURCE_ROOT` to an exact folder, an enclosing transfer folder, or a
 ZIP. Ambiguous runs require an explicit selection. Evaluation-only transfers produce
 an actionable missing-`train.pt` message, rather than proceeding to training setup.
 Use the updated source ZIP when prompted; the code bundle itself contains no weights.
+
+## Gauge-identifiable C1 (C1g) follow-up
+
+C1g is C1 with the kinetic zero mode pinned, κθ(k) = f(k²) − f(0). It is an exact
+reparameterization of C1: same parameters, same seed initialization, same data and
+40-epoch protocol, so C1 vs C1g is a paired comparison.
+
+1. **Train C1g** in `00_training.ipynb`: `TRAIN_PHASES=[7]`, `C1G_LAMBDAS=[0.0, 0.01]`.
+   This adds 6 jobs (C1g and C1g+PDE × 3 seeds). Every existing A / C1 / B-loop job keeps
+   its identity and is reused.
+2. **Extended Phase 7** in `07_pino_evaluation.ipynb` with `C1G_LAMBDAS=[0.0, 0.01]`:
+   A, A+PDE, B-loop, C1, C1+PDE, C1g, C1g+PDE. The probes cell picks C1g up automatically.
+   An empty `C1G_LAMBDAS` reproduces the original five-arm report identity.
+3. **Upload `12_gauge_identifiable_c1.ipynb`** and run all cells. Section (a) re-summarizes
+   the saved hybrid run in place, keeping the old summary as `summary.v1.json`. Section (b)
+   must reproduce the 2026-09-23 numbers before any new result is trusted. Sections (c)
+   and (d) include C1g once step 1 is done.
+
+Maintainers: `python -m scripts.build_gauge_notebook` and
+`python scripts/build_hybrid_notebook.py` re-embed the source after code edits.

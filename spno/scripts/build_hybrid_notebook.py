@@ -12,7 +12,8 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def build_notebook():
+def embedded_source():
+    """Deterministic ZIP of src/, scripts/ and packaging: (base64 text, sha256)."""
     paths = sorted((ROOT / "src").rglob("*.py")) + sorted((ROOT / "scripts").glob("*.py"))
     paths += [ROOT / "pyproject.toml", ROOT / "README.md"]
     buffer = io.BytesIO()
@@ -21,8 +22,93 @@ def build_notebook():
             entry = zipfile.ZipInfo(str(path.relative_to(ROOT)), date_time=(2026, 9, 23, 0, 0, 0))
             entry.compress_type = zipfile.ZIP_DEFLATED
             archive.writestr(entry, path.read_bytes())
-    encoded = base64.b64encode(buffer.getvalue()).decode()
-    digest = hashlib.sha256(buffer.getvalue()).hexdigest()
+    return base64.b64encode(buffer.getvalue()).decode(), hashlib.sha256(buffer.getvalue()).hexdigest()
+
+
+#: Installs the embedded source and resolves SOURCE_ROOT to the Phase 6 checkpoints.
+#: Expects SOURCE_ROOT, CHECKPOINT_ARCHIVE, OUTPUT_ROOT and IN_COLAB from the settings cell.
+SETUP = '''
+    import base64, hashlib, io, subprocess, zipfile
+    from pathlib import PurePosixPath
+
+    EMBEDDED_SOURCE_SHA256 = "__DIGEST__"
+    EMBEDDED_SOURCE = """__SOURCE__"""
+
+    def safe_extract(archive, destination):
+        destination = Path(destination).resolve()
+        for member in archive.infolist():
+            name = PurePosixPath(member.filename)
+            if name.is_absolute() or ".." in name.parts or "\\\\" in member.filename:
+                raise ValueError("Unsafe archive member: " + member.filename)
+            if not (destination / member.filename).resolve().is_relative_to(destination):
+                raise ValueError("Archive member escapes destination")
+        archive.extractall(destination)
+
+    if IN_COLAB:
+        from google.colab import drive
+        drive.mount("/content/drive")
+    local_project = os.environ.get("SPNO_PROJECT_ROOT")
+    if local_project:
+        PROJECT_ROOT = Path(local_project)
+    else:
+        raw = base64.b64decode(EMBEDDED_SOURCE)
+        assert hashlib.sha256(raw).hexdigest() == EMBEDDED_SOURCE_SHA256
+        base = Path("/content") if IN_COLAB else Path.cwd()
+        PROJECT_ROOT = base / ("spno-hybrid-code-" + EMBEDDED_SOURCE_SHA256[:12])
+        PROJECT_ROOT.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            assert archive.testzip() is None
+            safe_extract(archive, PROJECT_ROOT)
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "-e", str(PROJECT_ROOT)])
+    sys.path.insert(0, str(PROJECT_ROOT))
+    sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+    if not SOURCE_ROOT:
+        existing = Path("/content/pin/spno/results/phase6-standalone-artifacts")
+        if existing.is_dir():
+            SOURCE_ROOT = existing
+        else:
+            if not CHECKPOINT_ARCHIVE:
+                drive_root = Path("/content/drive/MyDrive")
+                names = ["phase6-eval-only-bd4e108527-K0.zip", "phase6-standalone-artifacts-bd4e108527-K0.zip"]
+                hits = [p for name in names for p in drive_root.rglob(name)]
+                if not hits:
+                    raise FileNotFoundError("Place the Phase 6 artifact ZIP in MyDrive, or set SOURCE_ROOT / CHECKPOINT_ARCHIVE in cell 1.")
+                CHECKPOINT_ARCHIVE = str(sorted(hits)[0])
+            archive_path = Path(CHECKPOINT_ARCHIVE)
+            archive_digest = hashlib.sha256()
+            with archive_path.open("rb") as stream:
+                for block in iter(lambda: stream.read(8 << 20), b""):
+                    archive_digest.update(block)
+            known = {
+                "phase6-eval-only-bd4e108527-K0.zip": "cc882810f6fec63f36d6923833c05c6dcde5b6d50b2a1df296634be755b1235d",
+                "phase6-standalone-artifacts-bd4e108527-K0.zip": "01fd894349dc36dd90386d877693e51bbe3d2d28e98609ccefdf02608a0a0812",
+            }
+            if archive_path.name in known:
+                assert archive_digest.hexdigest() == known[archive_path.name], "Checkpoint archive checksum mismatch"
+            extracted = PROJECT_ROOT.parent / ("spno-hybrid-artifacts-" + archive_digest.hexdigest()[:12])
+            with zipfile.ZipFile(archive_path) as archive:
+                assert archive.testzip() is None, "Corrupt checkpoint archive"
+                safe_extract(archive, extracted)
+            candidates = [p.parent for p in extracted.rglob("checkpoints") if (p / "phase6").is_dir()]
+            assert len(candidates) == 1, f"Expected one artifact root, found {candidates}"
+            SOURCE_ROOT = candidates[0]
+    SOURCE_ROOT = Path(SOURCE_ROOT)
+    assert (SOURCE_ROOT / "checkpoints" / "phase6").is_dir(), SOURCE_ROOT
+    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+    print("Embedded source:", EMBEDDED_SOURCE_SHA256)
+    print("Checkpoint root:", SOURCE_ROOT)
+    print("Results:", OUTPUT_ROOT)
+'''
+
+
+def setup_cell(digest, encoded):
+    return (textwrap.dedent(SETUP).replace("__DIGEST__", digest)
+            .replace("__SOURCE__", "\n" + "\n".join(textwrap.wrap(encoded, 120))))
+
+
+def build_notebook():
+    encoded, digest = embedded_source()
     cells = []
 
     def cell(kind, source):
@@ -125,81 +211,7 @@ def build_notebook():
     Checkpoint identity and convergence status are verified below; missing G6a/G7 weights stop the
     run instead of silently omitting those arms.
     ''')
-    setup = '''
-    import base64, hashlib, io, subprocess, zipfile
-    from pathlib import PurePosixPath
-
-    EMBEDDED_SOURCE_SHA256 = "__DIGEST__"
-    EMBEDDED_SOURCE = """__SOURCE__"""
-
-    def safe_extract(archive, destination):
-        destination = Path(destination).resolve()
-        for member in archive.infolist():
-            name = PurePosixPath(member.filename)
-            if name.is_absolute() or ".." in name.parts or "\\\\" in member.filename:
-                raise ValueError("Unsafe archive member: " + member.filename)
-            if not (destination / member.filename).resolve().is_relative_to(destination):
-                raise ValueError("Archive member escapes destination")
-        archive.extractall(destination)
-
-    if IN_COLAB:
-        from google.colab import drive
-        drive.mount("/content/drive")
-    local_project = os.environ.get("SPNO_PROJECT_ROOT")
-    if local_project:
-        PROJECT_ROOT = Path(local_project)
-    else:
-        raw = base64.b64decode(EMBEDDED_SOURCE)
-        assert hashlib.sha256(raw).hexdigest() == EMBEDDED_SOURCE_SHA256
-        base = Path("/content") if IN_COLAB else Path.cwd()
-        PROJECT_ROOT = base / ("spno-hybrid-code-" + EMBEDDED_SOURCE_SHA256[:12])
-        PROJECT_ROOT.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-            assert archive.testzip() is None
-            safe_extract(archive, PROJECT_ROOT)
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "-e", str(PROJECT_ROOT)])
-    sys.path.insert(0, str(PROJECT_ROOT))
-    sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-    if not SOURCE_ROOT:
-        existing = Path("/content/pin/spno/results/phase6-standalone-artifacts")
-        if existing.is_dir():
-            SOURCE_ROOT = existing
-        else:
-            if not CHECKPOINT_ARCHIVE:
-                drive_root = Path("/content/drive/MyDrive")
-                names = ["phase6-eval-only-bd4e108527-K0.zip", "phase6-standalone-artifacts-bd4e108527-K0.zip"]
-                hits = [p for name in names for p in drive_root.rglob(name)]
-                if not hits:
-                    raise FileNotFoundError("Place the Phase 6 artifact ZIP in MyDrive, or set SOURCE_ROOT / CHECKPOINT_ARCHIVE in cell 1.")
-                CHECKPOINT_ARCHIVE = str(sorted(hits)[0])
-            archive_path = Path(CHECKPOINT_ARCHIVE)
-            archive_digest = hashlib.sha256()
-            with archive_path.open("rb") as stream:
-                for block in iter(lambda: stream.read(8 << 20), b""):
-                    archive_digest.update(block)
-            known = {
-                "phase6-eval-only-bd4e108527-K0.zip": "cc882810f6fec63f36d6923833c05c6dcde5b6d50b2a1df296634be755b1235d",
-                "phase6-standalone-artifacts-bd4e108527-K0.zip": "01fd894349dc36dd90386d877693e51bbe3d2d28e98609ccefdf02608a0a0812",
-            }
-            if archive_path.name in known:
-                assert archive_digest.hexdigest() == known[archive_path.name], "Checkpoint archive checksum mismatch"
-            extracted = PROJECT_ROOT.parent / ("spno-hybrid-artifacts-" + archive_digest.hexdigest()[:12])
-            with zipfile.ZipFile(archive_path) as archive:
-                assert archive.testzip() is None, "Corrupt checkpoint archive"
-                safe_extract(archive, extracted)
-            candidates = [p.parent for p in extracted.rglob("checkpoints") if (p / "phase6").is_dir()]
-            assert len(candidates) == 1, f"Expected one artifact root, found {candidates}"
-            SOURCE_ROOT = candidates[0]
-    SOURCE_ROOT = Path(SOURCE_ROOT)
-    assert (SOURCE_ROOT / "checkpoints" / "phase6").is_dir(), SOURCE_ROOT
-    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
-    print("Embedded source:", EMBEDDED_SOURCE_SHA256)
-    print("Checkpoint root:", SOURCE_ROOT)
-    print("Results:", OUTPUT_ROOT)
-    '''
-    setup = textwrap.dedent(setup).replace("__DIGEST__", digest).replace("__SOURCE__", "\n" + "\n".join(textwrap.wrap(encoded, 120)))
-    cell("code", setup)
+    cell("code", setup_cell(digest, encoded))
     cell("markdown", r'''
     ## 3. Checkpoint inventory and operator sanity checks
 
