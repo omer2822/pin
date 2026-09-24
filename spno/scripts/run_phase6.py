@@ -163,13 +163,18 @@ def _model_from_checkpoint(
         return MassProjectedOperator(core) if model_name == "B-loop" else core
 
     kinetic = architecture.get("kinetic_mode", "K0")
-    if model_name == "C1":
+    if model_name in {"C1", "C1g"}:
+        # C1g is C1 with the kinetic k=0 rate pinned to zero (gauge-identifiable).
+        gauge = architecture.get("kinetic_gauge", "free")
+        if (model_name == "C1g") != (gauge == "zero_mode"):
+            raise RuntimeError(f"{model_name} checkpoint records kinetic_gauge={gauge!r}")
         return DensityPhaseSplitStep(
             domain,
             kinetic_mode=kinetic,
             local_mode=architecture.get("local_mode") or "L0",
             width=int(architecture.get("width", 32)),
             trained_dt=trained_dt,
+            kinetic_gauge=gauge,
         )
     if model_name == "C2":
         return FieldDensityPhaseSplitStep(

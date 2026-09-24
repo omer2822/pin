@@ -161,7 +161,7 @@ def _structured_architecture(
         "grid_size": data_config.grid_size,
         "dial": dial,
     }
-    if name == "C1":
+    if name in ("C1", "C1g"):
         architecture["width"] = 32
     else:
         architecture.update(modes=16, width=64, n_layers=4)

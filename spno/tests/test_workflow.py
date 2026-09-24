@@ -403,3 +403,66 @@ def test_phase6_g7_restores_budget_bound_arm_outside_quick_paths(budget_bound_st
     result = _run_g7(base, source, source / 'data', data, [0], 'K0', fixed,
                      device='cpu', quick=False, allow_budget_bound=True)
     assert set(result['fixed_alpha']['banded']) == {'A', 'C1', 'C2'}
+
+
+#: prepare(7) identifiers recorded before C1g existed. Records in Drive are keyed by
+#: these; any change would silently orphan trained A, C1, C1+PDE and B-loop weights.
+PRE_C1G_IDENTIFIERS = {
+    ('A', 3, 0.0): '3f4ced8e5b5cdc2c2fef', ('A', 3, 0.01): '0e4884bcbd7260075cf1',
+    ('A', 5, 0.0): '380631ae6154d36a0a45', ('A', 5, 0.01): '686b82859a865b10f1ec',
+    ('B-loop', 3, 0.0): 'c17e92ebf155c06e7173', ('B-loop', 5, 0.0): 'b4b61fe7b0f77a2050b3',
+    ('C1', 3, 0.0): '238a251bc2bfe5902bd3', ('C1', 3, 0.01): 'a103309dfc70bc05c28e',
+    ('C1', 5, 0.0): '9208627e151b5745ceae', ('C1', 5, 0.01): 'c8502544ce26ff7d1ecc',
+}
+
+
+@pytest.mark.parametrize('c1g', [(), (0.01,)])
+def test_adding_c1g_leaves_existing_phase7_identities_unchanged(standalone, tmp_path, c1g):
+    from spno.workflow import Workflow
+    root, data, config, _ = standalone
+    workflow = Workflow(root, tmp_path / 'new', data_config=data, train_config=config)
+    jobs = workflow.prepare(7, seeds=[3, 5], lambdas=[0., .01], c1g_lambdas=c1g)
+    existing = {(j.name, j.seed, j.physics_weight): j.identifier for j in jobs if j.name != 'C1g'}
+    assert existing == PRE_C1G_IDENTIFIERS
+    c1g_jobs = [j for j in jobs if j.name == 'C1g']
+    assert {(j.seed, j.physics_weight) for j in c1g_jobs} == (
+        {(s, w) for s in (3, 5) for w in (0., .01)} if c1g else set())
+    for job in c1g_jobs:
+        c1 = next(j for j in jobs if j.name == 'C1' and j.seed == job.seed)
+        assert job.spec['architecture'] == {**c1.spec['architecture'], 'kinetic_gauge': 'zero_mode'}
+    # C1g is never imported: no Phase 6 run trained it.
+    assert all(row['status'] == 'missing' for row in workflow.status(c1g_jobs))
+
+
+def test_phase7_reports_c1g_arm_after_training(standalone, tmp_path, monkeypatch):
+    from spno.workflow import Workflow
+    from spno.phase_workflow import evaluate_phase
+    from scripts.run_phase6 import _model_from_checkpoint
+    from spno.checkpoints import load_checkpoint_payload
+    root, data, config, _ = standalone
+    workflow = Workflow(root, tmp_path / 'new', data_config=data, train_config=config)
+    jobs = workflow.prepare(7, seeds=[3], lambdas=[.01], c1g_lambdas=[.01])
+    workflow.train([j for j in jobs if j.physics_weight or j.name == 'C1g'])
+    c1g = next(j for j in jobs if j.name == 'C1g' and j.physics_weight == 0)
+    payload = load_checkpoint_payload(workflow._record(c1g)['path'])
+    model = _model_from_checkpoint(payload, data, expected_name='C1g')
+    model.load_state_dict(payload.state_dict, strict=True)
+    assert model.kinetic.gauge == 'zero_mode'
+    monkeypatch.setattr(torch.optim.AdamW, 'step', lambda *_: pytest.fail('evaluation trained'))
+    result = evaluate_phase(workflow, 7, seeds=[3], lambdas=[.01], c1g_lambdas=[.01],
+                            allow_budget_bound=True)
+    assert set(result['sweeps']) == {'A', 'C1', 'C1g'}
+    assert set(result['sweeps']['C1g']) == {'0.0', '0.01'}
+    assert result['sweeps']['C1g']['0.01']['mass_drift_mean'] < 1e-12
+    assert result['evaluation_config']['c1g_lambdas'] == [.01]
+    assert len(result['checkpoint_sources']) == 7
+
+
+def test_c1g_checkpoint_rejects_a_mismatched_gauge_record(standalone):
+    from scripts.run_phase6 import _model_from_checkpoint
+    from spno.checkpoints import CheckpointPayload
+    _, data, _, _ = standalone
+    meta = CheckpointMetadata(1, 'C1g', config_hash(data), 3, 'one-step', None, data.dt,
+                              {'kinetic_mode': 'K0', 'local_mode': 'L0', 'width': 4}, False, 0)
+    with pytest.raises(RuntimeError, match='kinetic_gauge'):
+        _model_from_checkpoint(CheckpointPayload(meta, {}), data, expected_name='C1g')

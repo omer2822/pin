@@ -57,6 +57,7 @@ Tensor = torch.Tensor
 
 KineticMode = Literal["K0", "K1", "K2"]
 LocalMode = Literal["L0", "L1", "L2"]
+KineticGauge = Literal["free", "zero_mode"]
 
 
 class PointwisePhaseMLP(nn.Module):
@@ -135,6 +136,15 @@ class KineticPhase(nn.Module):
 
     ``k^2`` is normalized by its grid maximum before entering the network; unnormalized
     it reaches 1024 at N=64 and saturates every tanh.
+
+    **Gauge.**  The full step cannot distinguish ``(kappa, nu)`` from
+    ``(kappa - c, nu + c)``: a constant kinetic rate is a global phase, exactly like a
+    constant local rate.  The Phase 6 K0 checkpoints used that freedom, carrying
+    ``kappa(0) ~ -25`` that the local net cancels, which made the halves meaningless
+    when swapped.  ``gauge="zero_mode"`` returns ``f(k^2) - f(0)`` so ``kappa(0) = 0``,
+    the true value.  It is an exact reparameterization, not a smaller class -- the
+    local net's free bias absorbs any constant -- so it changes identifiability and
+    optimization, never expressivity.  K2 already has ``kappa(0) = 0``.
     """
 
     def __init__(
@@ -144,12 +154,16 @@ class KineticPhase(nn.Module):
         mode: KineticMode = "K0",
         width: int = 32,
         parameter_dim: int = 2,
+        gauge: KineticGauge = "free",
     ) -> None:
         super().__init__()
         if mode not in ("K0", "K1", "K2"):
             raise ValueError("mode must be one of K0, K1, K2")
+        if gauge not in ("free", "zero_mode"):
+            raise ValueError("gauge must be 'free' or 'zero_mode'")
         self.domain = domain
         self.mode = mode
+        self.gauge = gauge
         # Stored in the model's own dtype, not float64.  A float64 buffer on an
         # otherwise-float32 module makes ``model.to("mps")`` raise -- MPS has no float64
         # -- which silently barred the entire C family from the training device.
@@ -164,6 +178,8 @@ class KineticPhase(nn.Module):
         # would survive widening and sit nine orders of magnitude above the 1e-13 bounds
         # the structural tests assert.
         k_squared = domain.wave_number_squared().to(torch.get_default_dtype())
+        if k_squared.reshape(-1)[0] != 0:
+            raise ValueError("the zero mode must sit at fftfreq index 0")
         self.register_buffer("k_squared", k_squared)
         self.register_buffer("k_squared_scale", k_squared.max().clamp_min(1.0))
         feature_dim = 2 if mode == "K1" else 1
@@ -228,6 +244,8 @@ class KineticPhase(nn.Module):
         if self.mode == "K2":
             exact = -alpha * k_squared.reshape(1, -1)
             return exact * (1 + raw)
+        if self.gauge == "zero_mode":
+            return raw - raw[:, :1]  # k = 0 is fftfreq index 0, asserted in __init__
         return raw
 
 
@@ -315,6 +333,7 @@ class LearnedSplitStep(StepOperator):
         *,
         kinetic_mode: KineticMode | None = "K0",
         trained_dt: float | None = None,
+        kinetic_gauge: KineticGauge = "free",
     ) -> None:
         super().__init__(domain, trained_dt)
         if domain.dim != 1:
@@ -325,7 +344,9 @@ class LearnedSplitStep(StepOperator):
         # incompatible with its siblings, breaking checkpoint round-trips across the
         # family.
         self.kinetic = (
-            KineticPhase(domain, mode=kinetic_mode) if kinetic_mode is not None else None
+            KineticPhase(domain, mode=kinetic_mode, gauge=kinetic_gauge)
+            if kinetic_mode is not None
+            else None
         )
 
     def local_phase(
@@ -379,8 +400,14 @@ class DensityPhaseSplitStep(LearnedSplitStep):
         local_mode: LocalMode = "L0",
         width: int = 32,
         trained_dt: float | None = None,
+        kinetic_gauge: KineticGauge = "free",
     ) -> None:
-        super().__init__(domain, kinetic_mode=kinetic_mode, trained_dt=trained_dt)
+        super().__init__(
+            domain,
+            kinetic_mode=kinetic_mode,
+            trained_dt=trained_dt,
+            kinetic_gauge=kinetic_gauge,
+        )
         self.local = LocalPhaseLadder(mode=local_mode, width=width)
 
     def local_phase(

@@ -17,7 +17,8 @@ from .workflow import Workflow, stable_hash
 def evaluate_phase(workflow: Workflow, phase: int, *, seeds=None, device='cpu',
                    lambdas=(0., .01, .1, 1., 10.), fractions=(.05, .1, .25, .5, 1.),
                    sigmas=(0., .1), gammas=(0., .001), noise=(0., .001, .01, .05),
-                   grid=128, arms=None, allow_budget_bound=False, train_config=None):
+                   grid=128, arms=None, allow_budget_bound=False, train_config=None,
+                   c1g_lambdas=()):
     seeds = workflow.seeds if seeds is None else list(seeds)
     if not seeds:
         raise ValueError('At least one seed is required')
@@ -28,6 +29,9 @@ def evaluate_phase(workflow: Workflow, phase: int, *, seeds=None, device='cpu',
                     noise=list(noise), grid=grid, arms=arms, horizon=horizon,
                     allow_budget_bound=allow_budget_bound,
                     requested_train_config=asdict(train_config) if train_config else None)
+    if c1g_lambdas:
+        # Only when requested, so pre-C1g report identities are unchanged.
+        settings['c1g_lambdas'] = list(c1g_lambdas)
     payload = {'phase': phase, 'data_hash': config_hash(workflow.data_config),
                'seeds': seeds, 'quick': workflow.quick, 'selected_horizon': horizon,
                'evaluation_config': settings, 'checkpoint_sources': {},
@@ -58,7 +62,7 @@ def evaluate_phase(workflow: Workflow, phase: int, *, seeds=None, device='cpu',
 
     if phase == 7:
         from scripts import run_phase7 as runner
-        jobs = prepare(7, lambdas=lambdas)
+        jobs = prepare(7, lambdas=lambdas, c1g_lambdas=c1g_lambdas)
         # Preflight the entire selection before any expensive evaluation.
         for job in jobs:
             restore(job)
@@ -74,14 +78,17 @@ def evaluate_phase(workflow: Workflow, phase: int, *, seeds=None, device='cpu',
                 'parameter_count': per_seed[0]['metrics']['parameters'],
                 **runner.aggregate_pino_seed_metrics(per_seed, horizon=horizon)}
         weights = sorted({job.physics_weight for job in jobs})
+        families = ('A', 'C1', 'C1g') if any(j.name == 'C1g' for j in jobs) else ('A', 'C1')
         payload['sweeps'] = {
-            name: {str(weight): summarize([j for j in jobs if j.name == name and j.physics_weight == weight])
-                   for weight in weights}
-            for name in ('A', 'C1')}
-        payload['baselines'] = {name: payload['sweeps'][name]['0.0'] for name in ('A', 'C1')}
+            name: {str(weight): summarize(selected)
+                   for weight in weights
+                   if (selected := [j for j in jobs if j.name == name and j.physics_weight == weight])}
+            for name in families}
+        payload['baselines'] = {name: payload['sweeps'][name]['0.0'] for name in families}
         payload['baselines']['B-loop'] = summarize([j for j in jobs if j.name == 'B-loop'])
         payload['sweep'] = payload['sweeps']['A']  # historical A-only report consumers
-        payload['variant'] = '7a-A-PINO-B-loop-C1-C1-PDE'
+        payload['variant'] = ('7a-A-PINO-B-loop-C1-C1-PDE-C1g' if 'C1g' in families
+                              else '7a-A-PINO-B-loop-C1-C1-PDE')
         payload['reference_lines'] = {'model_A_one_step': payload['baselines']['A']['one_step_mean']}
         payload['confound'] = (
             'The Crank–Nicolson residual conserves mass when solved exactly; a soft penalty '
@@ -349,7 +356,7 @@ def run_stage(phase, args):
             raise ValueError('Declare the original protocol with --source-config before overriding it')
         requested = replace(workflow.train_config, **json.loads(args.train_config.read_text()))
     options = {'seeds': args.seeds, 'train_config': requested}
-    for cli, key in (('lambdas', 'lambdas'), ('train_fractions', 'fractions'), ('sigmas', 'sigmas'), ('gammas', 'gammas')):
+    for cli, key in (('lambdas', 'lambdas'), ('c1g_lambdas', 'c1g_lambdas'), ('train_fractions', 'fractions'), ('sigmas', 'sigmas'), ('gammas', 'gammas')):
         if hasattr(args, cli):
             options[key] = getattr(args, cli)
     if args.stage == 'evaluate':

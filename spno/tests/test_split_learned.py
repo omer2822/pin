@@ -519,3 +519,54 @@ def test_widening_recovers_float64_and_lands_on_exact_integers():
     native = domain.wave_number_squared(dtype=torch.float32).double()
     assert not torch.equal(native, torch.round(native))
     assert float((native - torch.round(native)).abs().max()) > 1e-5
+
+
+# --------------------------------------------------------------------------------
+# C1g: the kinetic zero mode is pinned, removing the kinetic/local gauge freedom
+# --------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ["K0", "K1"])
+def test_zero_mode_gauge_pins_kappa_at_k0_exactly(mode):
+    domain = _domain()
+    model = _build(DensityPhaseSplitStep, domain, kinetic_mode=mode, kinetic_gauge="zero_mode")
+    _, _, alpha, beta = _inputs(domain)
+    rate = model.kinetic(torch.stack((alpha, beta), -1))
+    assert torch.equal(rate[:, 0], torch.zeros_like(rate[:, 0]))
+    free = _build(DensityPhaseSplitStep, domain, kinetic_mode=mode)
+    free_rate = free.kinetic(torch.stack((alpha, beta), -1))
+    assert free_rate[:, 0].abs().min() > 0  # same init: the free model does carry an offset
+    assert torch.allclose(rate, free_rate - free_rate[:, :1], atol=1e-13)
+
+
+def test_c1g_keeps_every_structural_guarantee():
+    domain = _domain()
+    model = _build(DensityPhaseSplitStep, domain, kinetic_gauge="zero_mode")
+    field, potential, alpha, beta = _inputs(domain)
+    out = model(field, potential, alpha, beta, DT)
+    assert mass_drift(out, field, domain).max() < 1e-13
+    back = model(out, potential, alpha, beta, -DT)
+    assert relative_l2(back, field, domain).max() < 1e-13
+    rotated = model(field * torch.exp(torch.tensor(0.7j)), potential, alpha, beta, DT)
+    assert torch.allclose(rotated, out * torch.exp(torch.tensor(0.7j)), atol=1e-13)
+
+
+def test_c1g_is_an_exact_reparameterization_of_c1_with_identical_init():
+    """Same parameters, same seed -> same init; C1g equals C1 with kappa(0) moved to nu."""
+
+    domain = _domain()
+    free = _build(DensityPhaseSplitStep, domain, seed=4)
+    gauged = _build(DensityPhaseSplitStep, domain, seed=4, kinetic_gauge="zero_mode")
+    assert free.state_dict().keys() == gauged.state_dict().keys()
+    assert all(torch.equal(free.state_dict()[k], v) for k, v in gauged.state_dict().items())
+    field, potential, alpha, beta = _inputs(domain)
+    offset = free.kinetic(torch.stack((alpha, beta), -1))[:, :1]
+    shifted = gauged.local_phase
+    gauged.local_phase = lambda *args: shifted(*args) + offset
+    assert torch.allclose(gauged(field, potential, alpha, beta, DT),
+                          free(field, potential, alpha, beta, DT), atol=1e-12)
+
+
+def test_unknown_gauge_is_rejected():
+    with pytest.raises(ValueError, match="gauge"):
+        DensityPhaseSplitStep(_domain(), kinetic_gauge="k0")

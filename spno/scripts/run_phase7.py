@@ -16,7 +16,8 @@ Usage:
     python scripts/run_phase7.py [--quick] [--seeds 0 1 2] [--epochs 60]
                                  [--device auto] [--lambdas 0.0 0.01 0.1 1 10]
 
-The explicit --stage workflow evaluates A, A+PDE, B-loop, C1 and C1+PDE.
+The explicit --stage workflow evaluates A, A+PDE, B-loop, C1 and C1+PDE, plus C1g and
+C1g+PDE (C1 with kappa_theta(0) = 0) when --c1g-lambdas is given.
 The legacy invocation without --stage retains the A-only sweep.
 
 Nothing is trained here without an explicit run; the deferred Phase 2-5 convergence debt
@@ -138,6 +139,8 @@ def make_comparison_plots(payload: dict, output) -> None:
                  "converged_seeds": sum(baseline["converged"]),
                  **{f"{key}_{stat}": baseline[f"{key}_{stat}"]
                     for key, _ in panels for stat in ("mean", "std")}})
+    # Sweeps may differ in length (C1g runs a short one): tick the union.
+    weights = sorted({float(w) for sweep in payload["sweeps"].values() for w in sweep})
     positive = [w for w in weights if w > 0]
     for axis, (key, title) in zip(axes.flat, panels):
         mean, std = baseline[f"{key}_mean"], baseline[f"{key}_std"]
@@ -422,6 +425,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--device", default="auto")
     parser.add_argument(
         "--lambdas", type=float, nargs="+", default=[0.0, 0.01, 0.1, 1.0, 10.0]
+    )
+    parser.add_argument(
+        "--c1g-lambdas", type=float, nargs="*", default=[],
+        help="add the gauge-fixed C1g arm at these weights (0 is always included)",
     )
     from spno.phase_workflow import add_workflow_arguments, parse_workflow_args
     add_workflow_arguments(parser)

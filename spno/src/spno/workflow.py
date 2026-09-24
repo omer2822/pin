@@ -35,6 +35,10 @@ def protocol(config: TrainConfig) -> dict:
     return value
 
 
+#: Pointwise-local split steps: C1, and C1g (C1 with kappa_theta(0) = 0).
+POINTWISE_C_FAMILY = ('C1', 'C1g')
+
+
 def architecture(name: str, data: DataConfig, stored=None, *, kinetic='K0') -> dict:
     stored = stored or {}
     if name in ('A', 'B-loop', 'A-wide'):
@@ -46,10 +50,14 @@ def architecture(name: str, data: DataConfig, stored=None, *, kinetic='K0') -> d
         if name == 'B-loop':
             result['projection'] = 'mass'
         return result
+    pointwise = name in POINTWISE_C_FAMILY
     result = {'kinetic_mode': kinetic, 'local_mode': None if name == 'C3' else stored.get('local_mode', 'L0'),
-              'width': int(stored.get('width', 32 if name == 'C1' else 64))}
-    if name != 'C1':
+              'width': int(stored.get('width', 32 if pointwise else 64))}
+    if not pointwise:
         result.update(modes=int(stored.get('modes', 16)), n_layers=int(stored.get('n_layers', 4)))
+    if name == 'C1g':
+        # Only C1g carries the key, so every existing C1 identity is unchanged.
+        result['kinetic_gauge'] = 'zero_mode'
     return result
 
 
@@ -151,6 +159,10 @@ class Workflow:
         config = replace(train_config, seed=seed)
         source = self._base_row(name, seed)
         stored = source['metadata']['architecture'] if source else None
+        if name == 'C1g' and stored is None:
+            # No Phase 6 C1g exists; copy C1's shape so the pair differs only in gauge.
+            c1 = self._base_row('C1', seed)
+            stored = c1['metadata']['architecture'] if c1 else None
         arch = architecture(name, self.data_config, stored, kinetic=kinetic)
         train_shard = TrajectoryShard.load(paths['train'])
         scale = field_scale(train_shard, self.data_config.domain)
@@ -176,7 +188,7 @@ class Workflow:
 
     def prepare(self, phase, *, seeds=None, lambdas=(0., .01, .1, 1., 10.),
                 fractions=(.05, .1, .25, .5, 1.), sigmas=(0., .1), gammas=(0., .001),
-                train_config=None, generate=True):
+                train_config=None, generate=True, c1g_lambdas=()):
         config = train_config or self.train_config
         if config is None:
             raise ValueError('Original training protocol is unknown; supply train_config explicitly, including epochs')
@@ -195,10 +207,19 @@ class Workflow:
             # caller selects only positive weights. B is one projection baseline.
             if 0.0 not in weights:
                 weights.append(0.0)
-            for name in ('A', 'C1', 'B-loop'):
-                for weight in (weights if name != 'B-loop' else [0.0]):
+            # C1g (opt-in) has its own, usually shorter, sweep; empty keeps the
+            # historical five-arm catalog unchanged.
+            c1g_weights = list(dict.fromkeys(float(w) for w in c1g_lambdas))
+            if any(not math.isfinite(w) or w < 0 for w in c1g_weights):
+                raise ValueError('C1g lambda values must be finite and nonnegative')
+            if c1g_weights and 0.0 not in c1g_weights:
+                c1g_weights.append(0.0)
+            sweeps = {'A': weights, 'C1': weights, 'B-loop': [0.0], 'C1g': c1g_weights}
+            for name, selected in sweeps.items():
+                for weight in selected:
                     for seed in seeds:
-                        source = self._base_row(name, seed)
+                        # C1g inherits the kinetic rung of the C1 it is paired with.
+                        source = self._base_row('C1' if name == 'C1g' else name, seed)
                         kinetic = source['metadata']['architecture'].get('kinetic_mode', 'K0') if source else 'K0'
                         jobs.append(self._job(name, seed, base, config_hash(self.data_config),
                                               config, weight, kinetic=kinetic))
