@@ -10,6 +10,7 @@
 | [10_dirichlet.ipynb](10_dirichlet.ipynb) | Solve Laplace/Poisson problems on a disk and rectangle, without training |
 | [11_hybrid_kinetic_ablation.ipynb](11_hybrid_kinetic_ablation.ipynb) | Self-contained Colab study of exact kinetic + learned local across G1–G9, paired component ablations, fresh probe seeds, bandwidth sweeps, dispersion, and long rollouts |
 | [12_gauge_identifiable_c1.ipynb](12_gauge_identifiable_c1.ipynb) | Self-contained: reciprocal component ablation (K_exact+L_θ vs K_θ+L_exact), gauge-fixed swaps, the local law L_θ ≈ βρ − V, and the same ablation on C1g |
+| [13_kinetic_support_ladder.ipynb](13_kinetic_support_ladder.ipynb) | Self-contained, **trains**: C1 at training bandwidth 8/10/12/16 (K0) plus K1/K2 at bandwidth 8, Phase 6 protocol; where the learned dispersion leaves −αk², against a pre-registered data-support vs architecture rule. Rebuild with `python -m scripts.build_support_notebook` |
 
 ## Hybrid follow-up notebook
 
