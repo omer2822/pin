@@ -11,6 +11,7 @@
 | [11_hybrid_kinetic_ablation.ipynb](11_hybrid_kinetic_ablation.ipynb) | Self-contained Colab study of exact kinetic + learned local across G1–G9, paired component ablations, fresh probe seeds, bandwidth sweeps, dispersion, and long rollouts |
 | [12_gauge_identifiable_c1.ipynb](12_gauge_identifiable_c1.ipynb) | Self-contained: reciprocal component ablation (K_exact+L_θ vs K_θ+L_exact), gauge-fixed swaps, the local law L_θ ≈ βρ − V, and the same ablation on C1g |
 | [13_kinetic_support_ladder.ipynb](13_kinetic_support_ladder.ipynb) | Self-contained, **trains**: C1 at training bandwidth 8/10/12/16 (K0) plus K1/K2 at bandwidth 8, Phase 6 protocol; where the learned dispersion leaves −αk², against a pre-registered data-support vs architecture rule. Rebuild with `python -m scripts.build_support_notebook` |
+| [14_kinetic_basis_quick_check.ipynb](14_kinetic_basis_quick_check.ipynb) | Self-contained quick K0 repair: low-band least-squares distillation into degree-1/3 polynomial heads, frozen local head and preserved kinetic gauge; paired dispersion, G4 and G9. No full retrain; optional head-only training. Rebuild with `python -m scripts.build_basis_notebook` |
 
 ## Hybrid follow-up notebook
 
