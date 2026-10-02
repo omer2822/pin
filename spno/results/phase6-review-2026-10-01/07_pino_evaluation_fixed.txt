@@ -1,0 +1,302 @@
+
+CELL 0 markdown
+# פייז 7 — A, A+PDE, B, C1, C1+PDE
+
+השוואה בין loss פיזיקלי רך, projection קשיח ומבנה פיזיקלי בארכיטקטורה.
+**B הוא B-loop**: FNO עם projection לשימור מסה במהלך האימון ובזמן החיזוי. אין עליו סוויפ נוסף.
+המחברת בודקת checkpoints קיימים בלבד. אימון הניסויים החסרים נעשה ב־`00_training.ipynb`.
+
+
+CELL 1 markdown
+## פתיחה ב־Colab
+העלו מחברת זו ל־Colab. בתחילת runtime חדש תא ההכנה יבקש את `spno-colab-source.zip` המצורף, אלא אם הקוד המעודכן כבר נמצא ב־`PROJECT_ROOT`. חיבור Drive נעשה דרך ממשק Colab הרגיל.
+
+הגדירו את נתיב תוצרי פייז 6. הנתיב המקורי יכול להיות ב־Drive או בדיסק המקומי של הריצה שטרם נסגרה. אפשר להעתיק את התוצרים ל־Drive באמצעות `COPY_TO`; המקור אינו נמחק. חשוב להשלים את ההעתקה לפני סגירת runtime שבו התוצרים נמצאים רק תחת `/content`.
+
+נדרשת תיקיית המקור המלאה, עם checkpoints וקובצי `train.pt`, `val.pt`, `test.pt`, וכן פרוטוקול האימון המקורי. ארכיון Phase 6 המיועד לבדיקה בלבד ומשמיט את train.pt אינו מספיק לפייז 7. השתמשו בחבילת הקוד המעודכנת כדי לקבל גם את C1+PDE.
+
+המחברת קוראת משקולות קיימות. B-loop משתמש במשקולות שאומנו עם projection; B-post אינו חלק מההשוואה הזו. checkpoints ישנים אינם מכילים optimizer ולכן אינם נקודת המשך מדויקת לאימון שנקטע. כל אימון חדש דרך הקטלוג שומר התקדמות בסוף כל epoch.
+
+
+CELL 2 code
+from pathlib import Path
+import os, sys, json, hashlib, subprocess, zipfile, importlib.util
+
+IN_COLAB = (
+    importlib.util.find_spec("google") is not None
+    and importlib.util.find_spec("google.colab") is not None
+)
+OPTIONS = json.loads(os.environ.get("SPNO_OPTIONS", "{}"))
+
+if IN_COLAB:
+    from google.colab import drive
+    drive.mount("/content/drive")
+
+# Reuse the uploaded Phase 7 source when available.
+uploaded_project = Path("/content/spno-colab")
+REPO = Path("/content/pin")
+
+if (uploaded_project / "src/spno/workflow.py").is_file():
+    PROJECT_ROOT = uploaded_project
+else:
+    if not (REPO / ".git").is_dir():
+        subprocess.check_call([
+            "git", "clone", "--depth", "1",
+            "https://github.com/omer2822/pin.git", str(REPO),
+        ])
+    else:
+        subprocess.check_call(["git", "-C", str(REPO), "pull", "--ff-only"])
+    PROJECT_ROOT = REPO / "spno"
+
+# Phase 7 needs the FULL archive, including training data.
+ARCHIVE_NAME = "phase6-standalone-artifacts-bd4e108527-K0.zip"
+EXPECTED_SHA256 = "01fd894349dc36dd90386d877693e51bbe3d2d28e98609ccefdf02608a0a0812"
+archive = Path("/content/drive/MyDrive/תיקייה ללא שם") / ARCHIVE_NAME
+
+if not archive.is_file():
+    matches = sorted(Path("/content/drive/MyDrive").rglob(ARCHIVE_NAME))
+    if not matches:
+        raise FileNotFoundError(f"Place {ARCHIVE_NAME} in MyDrive.")
+    archive = matches[0]
+
+print("Verifying archive:", archive, flush=True)
+digest = hashlib.sha256()
+with archive.open("rb") as stream:
+    for block in iter(lambda: stream.read(8 << 20), b""):
+        digest.update(block)
+if digest.hexdigest() != EXPECTED_SHA256:
+    raise RuntimeError("Archive checksum mismatch. Restore the original full ZIP.")
+
+EXTRACT_ROOT = Path("/content/phase6-full-bd4e108527-K0")
+SOURCE_ROOT = EXTRACT_ROOT / "spno/results/phase6-standalone-artifacts"
+marker = EXTRACT_ROOT / ".extraction-complete"
+
+if not marker.is_file():
+    print("Extracting full Phase 6 artifacts...", flush=True)
+    EXTRACT_ROOT.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive) as z:
+        prefix = "spno/results/phase6-standalone-artifacts/"
+        for member in z.infolist():
+            target = (EXTRACT_ROOT / member.filename).resolve()
+            if (
+                not member.filename.startswith(prefix)
+                or not target.is_relative_to(EXTRACT_ROOT.resolve())
+            ):
+                raise RuntimeError(f"Unexpected archive member: {member.filename}")
+        z.extractall(EXTRACT_ROOT)
+    marker.write_text(EXPECTED_SHA256)
+
+checkpoints = list((SOURCE_ROOT / "checkpoints/phase6").rglob("*.pt"))
+if not checkpoints:
+    raise FileNotFoundError(f"No checkpoints extracted under {SOURCE_ROOT}")
+
+for split in ("train", "val", "test"):
+    path = SOURCE_ROOT / "data/nls1d-bd4e108527" / f"{split}.pt"
+    if not path.is_file():
+        raise FileNotFoundError(f"Required Phase 7 dataset missing: {path}")
+
+OUTPUT_ROOT = Path(os.environ.get(
+    "SPNO_OUTPUT_ROOT", "/content/drive/MyDrive/spno/workflow"
+))
+OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+
+# Keep later notebook cells from restoring the incorrect default path.
+os.environ["SPNO_PROJECT_ROOT"] = str(PROJECT_ROOT)
+os.environ["SPNO_SOURCE_ROOT"] = str(SOURCE_ROOT)
+os.environ["SPNO_OUTPUT_ROOT"] = str(OUTPUT_ROOT)
+
+subprocess.check_call([
+    sys.executable, "-m", "pip", "install", "-q",
+    "-e", str(PROJECT_ROOT) + "[notebooks]",
+])
+
+# Clear cached project imports from previous setup attempts.
+for name in list(sys.modules):
+    if name in ("spno", "scripts") or name.startswith(("spno.", "scripts.")):
+        del sys.modules[name]
+sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+importlib.invalidate_caches()
+
+from IPython.display import display, HTML, Image
+
+print("Code:", PROJECT_ROOT)
+print("SOURCE_ROOT:", SOURCE_ROOT)
+print("OUTPUT_ROOT:", OUTPUT_ROOT)
+print(f"Loaded artifact directory: {len(checkpoints)} checkpoints; train/val/test present.")
+OUTPUT
+Drive already mounted at /content/drive; to attempt to forcibly remount, call drive.mount("/content/drive", force_remount=True).
+Verifying archive: /content/drive/MyDrive/תיקייה ללא שם/phase6-standalone-artifacts-bd4e108527-K0.zip
+Extracting full Phase 6 artifacts...
+Code: /content/spno-colab
+SOURCE_ROOT: /content/phase6-full-bd4e108527-K0/spno/results/phase6-standalone-artifacts
+OUTPUT_ROOT: /content/drive/MyDrive/spno/workflow
+Loaded artifact directory: 36 checkpoints; train/val/test present.
+
+
+CELL 3 markdown
+## הניסוי ופרוטוקול ההשוואה
+
+| זרוע | פיזיקה | אימון |
+|---|---|---|
+| A | ללא אילוץ | data loss |
+| A+PDE | soft constraint | data loss + lambda × residual |
+| B-loop | hard projection לשימור מסה | data loss, עם projection |
+| C1 | מבנה משמר פיזיקה | data loss |
+| C1+PDE | מבנה + soft constraint | data loss + lambda × residual |
+
+מציגים את **כל** ערכי lambda שנבחרו עבור A וגם עבור C1. ברירת המחדל היא `[0, 0.01, 0.1, 1, 10]`.
+ביקורות lambda=0 נכללות תמיד. בתוך כל משפחה, כל lambda מתחיל מאותו אתחול לפי seed — לא ממשקולות שכבר אומנו.
+משתמשים באותם נתונים, seeds ופרוטוקול אימון; בחירת checkpoint נעשית לפי שגיאת הנתונים ב־validation בלבד.
+C1 שומר על בחירת kinetic/local של מודל המקור. התאמה מלאה מאפשרת שימוש חוזר ב־A, B-loop ו־C1.
+בשלושה seeds ברירת המחדל מכילה 33 ניסויים: 9 ביקורות ו־24 ניסויים עם residual חיובי. ביקורות תואמות אינן מאומנות שוב.
+
+**הסתייגות מדעית:** משוואת Crank–Nicolson הדיסקרטית משמרת מסה כאשר פותרים אותה בדיוק; penalty רך אינו מבטיח זאת.
+ב־dt סופי הדינמיקה של CN שונה מזו של C1 split-step ושל פותר הייחוס. lambda גדול עלול להוסיף הטיה.
+שימור מסה לבדו אינו הוכחה לדיוק בדינמיקה.
+
+מדווחים שגיאה בצעד אחד, שגיאת rollout, סטיית מסה וסטיית אנרגיה באותו אופק `min(100, steps)`.
+ה־rollout והאינווריאנטים נמדדים ב־float64 על CPU. הגרף מציג ממוצע וסטיית תקן בין seeds; seed יחיד אינו אומדן לשונות.
+
+## בדיקת מוכנות
+
+checkpoint חסר עוצר את הבדיקה לפני המדידות. הכינו אותו במחברת האימון עם `TRAIN_PHASES=[7]`,
+אותם נתיבים, lambdas ו־`TRAIN_OVERRIDES`; בחרו במפורש את מזהי האימון החסרים.
+`ALLOW_BUDGET_BOUND=True` מתיר בדיקה חקרנית מסומנת ואינו הופך checkpoint למתכנס.
+מקור שאומן בתקציב חסר נשאר כזה; להגדלת התקציב הגדירו פרוטוקול חדש זהה באימון ובבדיקה.
+
+
+CELL 4 code
+from pathlib import Path
+import html
+from spno.train import TrainConfig
+from spno.workflow import Workflow
+from spno.experiments import pick_device
+from spno.phase_workflow import evaluate_phase
+
+if "SOURCE_ROOT" not in globals():
+    raise RuntimeError("Run the setup cell above first (it defines SOURCE_ROOT / OUTPUT_ROOT).")
+
+# Protocol the Phase 6 K0 run actually used (40-epoch cap). Declaring it lets
+# Phase 7 reuse the A / B-loop / C1 checkpoints as its lambda=0 controls.
+SOURCE_TRAIN_CONFIG = TrainConfig(epochs=40, batch_size=256, learning_rate=1e-3, patience=8)
+workflow = Workflow(
+    SOURCE_ROOT, OUTPUT_ROOT,
+    cache_root=Path("/content/spno-data-cache"),
+    train_config=SOURCE_TRAIN_CONFIG,
+)
+SEEDS = OPTIONS.get("seeds")            # None = every seed found in Phase 6
+DEVICE = pick_device(OPTIONS.get("device", "auto"))
+REQUESTED_TRAIN_CONFIG = None           # same protocol as the source
+print("Seeds:", workflow.seeds, "| device:", DEVICE, "| protocol:", workflow.train_config, flush=True)
+if DEVICE == "cpu":
+    print("WARNING: no GPU. Runtime > Change runtime type > GPU before training.", flush=True)
+
+# This cell trains/resumes missing experiments; it may take hours.
+TRAIN_MISSING = True
+ALLOW_BUDGET_BOUND = True  # Results remain explicitly labelled exploratory.
+
+LAMBDAS = OPTIONS.get("lambdas", [0.0, 0.01, 0.1, 1.0, 10.0])
+SEEDS = workflow.seeds if SEEDS is None else list(SEEDS)
+
+train_config = REQUESTED_TRAIN_CONFIG or workflow.train_config
+if train_config is None:
+    # A NEW experiment budget, not a declaration of the original training.
+    # Without the original protocol, imported baselines cannot be reused safely.
+    train_config = TrainConfig(
+        epochs=40,
+        batch_size=256,
+        learning_rate=1e-3,
+        patience=8,
+    )
+    print("Original training protocol unknown.")
+    print("Using fresh matched runs; this may also retrain A, B-loop and C1.")
+
+jobs = workflow.prepare(
+    7,
+    seeds=SEEDS,
+    lambdas=LAMBDAS,
+    train_config=train_config,
+    generate=False,
+)
+
+if {job.name for job in jobs} != {"A", "B-loop", "C1"}:
+    raise RuntimeError(
+        "The loaded source is the older A-only Phase 7 implementation. "
+        "Load the updated source bundle and restart the runtime before training."
+    )
+
+readiness = workflow.status(jobs)
+for row in readiness:
+    print(json.dumps(row, ensure_ascii=False))
+
+incompatible = [row for row in readiness if row["status"] == "incompatible"]
+if incompatible:
+    raise RuntimeError(
+        "Incompatible artifacts require repair before training:\n"
+        + json.dumps(incompatible, indent=2, ensure_ascii=False)
+    )
+
+pending_ids = {
+    row["id"]
+    for row in readiness
+    if row["status"] in {"missing", "interrupted"}
+}
+pending = [job for job in jobs if job.identifier in pending_ids]
+
+if pending:
+    if not TRAIN_MISSING:
+        raise RuntimeError(
+            f"{len(pending)} experiments need training. "
+            "Set TRAIN_MISSING=True to train/resume them."
+        )
+    print(f"Training/resuming {len(pending)} experiments on {DEVICE}...", flush=True)
+    workflow.train(pending, device=DEVICE)
+
+remaining = [
+    row for row in workflow.status(jobs)
+    if row["status"] != "ready"
+]
+if remaining:
+    raise RuntimeError(json.dumps(remaining, indent=2, ensure_ascii=False))
+
+result = evaluate_phase(
+    workflow,
+    7,
+    seeds=SEEDS,
+    device=DEVICE,
+    allow_budget_bound=ALLOW_BUDGET_BOUND,
+    train_config=train_config,
+    lambdas=LAMBDAS,
+)
+
+print("Saved:", result["output"])
+print("Exploratory / budget-bound:", result["exploratory"])
+
+CELL 5 code
+import csv
+print("Saved:", result["output"])
+print("Exploratory / budget-bound:", result["exploratory"])
+print("Selected rollout horizon:", result["selected_horizon"])
+print("Physics-loss caveat:", result["confound"])
+if not result["comparison_complete"]:
+    print("CONTROLS ONLY: no positive lambda was selected; this is not the five-arm comparison.")
+if len(SEEDS) < 2:
+    print("Single seed: standard deviation is recorded as 0, but variability has not been estimated.")
+
+comparison_path = Path(result["output"]) / "comparison.csv"
+with comparison_path.open() as handle:
+    comparison_rows = list(csv.DictReader(handle))
+columns = ["arm", "lambda", "seed_count", "parameters", "converged_seeds"]
+quantities = ["one_step", "rollout", "mass_drift", "energy_drift"]
+headers = columns + [q + " (mean ± SD)" for q in quantities]
+body = []
+for row in comparison_rows:
+    values = [row[key] for key in columns]
+    values += [f"{float(row[q + '_mean']):.4e} ± {float(row[q + '_std']):.2e}" for q in quantities]
+    body.append("<tr>" + "".join("<td>" + html.escape(str(v)) + "</td>" for v in values) + "</tr>")
+display(HTML("<table><tr>" + "".join("<th>" + html.escape(h) + "</th>" for h in headers)
+             + "</tr>" + "".join(body) + "</table>"))
+print("Comparison table:", comparison_path)
+for path in sorted((Path(result["output"]) / "plots").glob("*.png")):
+    display(Image(filename=str(path)))

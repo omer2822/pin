@@ -1,0 +1,353 @@
+CELL 2 OUTPUT 0
+{
+  "training_seeds": [
+    0,
+    1,
+    2
+  ],
+  "probe_seeds": [
+    1000,
+    1001,
+    1002,
+    1003,
+    1004
+  ],
+  "batch": 16,
+  "bandwidths": [
+    4,
+    6,
+    8,
+    10,
+    12,
+    16,
+    20,
+    24,
+    28,
+    32
+  ],
+  "short_steps": 200,
+  "long_steps": 2000,
+  "stride": 50,
+  "reference_substeps": 32,
+  "reference_tolerance": 0.0001,
+  "spatial_samples": 2,
+  "spatial_tolerance": 0.001,
+  "tail_threshold": 1e-06,
+  "device": "cpu",
+  "threads": 2,
+  "allow_budget_bound": true,
+  "bootstrap_draws": 2000
+}
+
+CELL 4 OUTPUT 0
+Drive already mounted at /content/drive; to attempt to forcibly remount, call drive.mount("/content/drive", force_remount=True).
+Embedded source: 9d679ef833b3e368c0f551fb56ad06368397092aea2a99558fcc480e3f8db4bb
+Checkpoint root: /content/spno-hybrid-artifacts-cc882810f6fe/spno/results/phase6-standalone-artifacts
+Results: /content/drive/MyDrive/spno/hybrid-ablation
+
+CELL 6 OUTPUT 0
+Training data: DataConfig(grid_size=64, dt=0.01, substeps=32, steps=200, alpha_range=(0.7, 1.1), beta_range=(-0.4, 0.6), initial_bandwidth=8, potential_amplitude_range=(0.0, 0.5), potential_correlation_length=1.0, mass_range=(1.0, 3.0), n_train=800, n_val=100, n_test=100, seed=0)
+C1 seed 0 converged True sha256 c60fc59bb004c6c9
+C1 seed 1 converged False sha256 c66210a615c34c17
+C1 seed 2 converged False sha256 d3e71263dda4f471
+G6a/C1 seed 0 converged False sha256 c2a0852d62dc892c
+G6a/C1 seed 1 converged False sha256 662871006e95f122
+G6a/C1 seed 2 converged True sha256 25088150f1a5a838
+G7-alpha-fixed/C1 seed 0 converged False sha256 10d695849f777112
+G7-alpha-fixed/C1 seed 1 converged False sha256 3867ec343d761348
+G7-alpha-fixed/C1 seed 2 converged False sha256 9c033ffe3be6a343
+PASS: exact control, copied C1, and reversibility for all four component combinations.
+Active learned parameter counts (frozen for evaluation):
+{'C1': 2466, 'exactK_learnedL': 1249, 'learnedK_exactL': 1217, 'exact_split': 0}
+
+CELL 10 OUTPUT 0
+Run 3bf81deae4ef1ff9: 36 cases × 5 probe batches; 3 training seeds; exploratory=True
+G1-interpolation / probe 1000: already done
+G1-interpolation / probe 1001: already done
+G1-interpolation / probe 1002: already done
+G1-interpolation / probe 1003: already done
+G1-interpolation / probe 1004: already done
+G2-extrapolation / probe 1000: already done
+G2-extrapolation / probe 1001: already done
+G2-extrapolation / probe 1002: already done
+G2-extrapolation / probe 1003: already done
+G2-extrapolation / probe 1004: already done
+G3-potential-zero / probe 1000: already done
+G3-potential-zero / probe 1001: already done
+G3-potential-zero / probe 1002: already done
+G3-potential-zero / probe 1003: already done
+G3-potential-zero / probe 1004: already done
+G3-potential-cosine / probe 1000: already done
+G3-potential-cosine / probe 1001: already done
+G3-potential-cosine / probe 1002: already done
+G3-potential-cosine / probe 1003: already done
+G3-potential-cosine / probe 1004: already done
+G3-potential-well / probe 1000: already done
+G3-potential-well / probe 1001: already done
+G3-potential-well / probe 1002: already done
+G3-potential-well / probe 1003: already done
+G3-potential-well / probe 1004: already done
+G3-potential-short / probe 1000: already done
+G3-potential-short / probe 1001: already done
+G3-potential-short / probe 1002: already done
+G3-potential-short / probe 1003: already done
+G3-potential-short / probe 1004: already done
+G3-potential-strong / probe 1000: already done
+G3-potential-strong / probe 1001: already done
+G3-potential-strong / probe 1002: already done
+G3-potential-strong / probe 1003: already done
+G3-potential-strong / probe 1004: already done
+G4-bandwidth-4 / probe 1000: already done
+G4-bandwidth-4 / probe 1001: already done
+G4-bandwidth-4 / probe 1002: already done
+G4-bandwidth-4 / probe 1003: already done
+G4-bandwidth-4 / probe 1004: already done
+G4-bandwidth-6 / probe 1000: already done
+G4-bandwidth-6 / probe 1001: already done
+G4-bandwidth-6 / probe 1002: already done
+G4-bandwidth-6 / probe 1003: already done
+G4-bandwidth-6 / probe 1004: already done
+G4-bandwidth-8 / probe 1000: already done
+G4-bandwidth-8 / probe 1001: already done
+G4-bandwidth-8 / probe 1002: already done
+G4-bandwidth-8 / probe 1003: already done
+G4-bandwidth-8 / probe 1004: already done
+G4-bandwidth-10 / probe 1000: already done
+G4-bandwidth-10 / probe 1001: already done
+G4-bandwidth-10 / probe 1002: already done
+G4-bandwidth-10 / probe 1003: already done
+G4-bandwidth-10 / probe 1004: already done
+G4-bandwidth-12 / probe 1000: already done
+G4-bandwidth-12 / probe 1001: already done
+G4-bandwidth-12 / probe 1002: already done
+G4-bandwidth-12 / probe 1003: already done
+G4-bandwidth-12 / probe 1004: already done
+G4-bandwidth-16 / probe 1000: already done
+G4-bandwidth-16 / probe 1001: already done
+G4-bandwidth-16 / probe 1002: already done
+G4-bandwidth-16 / probe 1003: already done
+G4-bandwidth-16 / probe 1004: already done
+G4-bandwidth-20 / probe 1000: already done
+G4-bandwidth-20 / probe 1001: already done
+G4-bandwidth-20 / probe 1002: already done
+G4-bandwidth-20 / probe 1003: already done
+G4-bandwidth-20 / probe 1004: already done
+G4-bandwidth-24 / probe 1000: already done
+G4-bandwidth-24 / probe 1001: already done
+G4-bandwidth-24 / probe 1002: already done
+G4-bandwidth-24 / probe 1003: already done
+G4-bandwidth-24 / probe 1004: already done
+G4-bandwidth-28 / probe 1000: already done
+G4-bandwidth-28 / probe 1001: already done
+G4-bandwidth-28 / probe 1002: already done
+G4-bandwidth-28 / probe 1003: already done
+G4-bandwidth-28 / probe 1004: already done
+G4-bandwidth-32 / probe 1000: already done
+G4-bandwidth-32 / probe 1001: already done
+G4-bandwidth-32 / probe 1002: already done
+G4-bandwidth-32 / probe 1003: already done
+G4-bandwidth-32 / probe 1004: already done
+G6a-multidt-0.5 / probe 1000: already done
+G6a-multidt-0.5 / probe 1001: already done
+G6a-multidt-0.5 / probe 1002: already done
+G6a-multidt-0.5 / probe 1003: already done
+G6a-multidt-0.5 / probe 1004: already done
+G6b-transfer-0.5 / probe 1000: already done
+G6b-transfer-0.5 / probe 1001: already done
+G6b-transfer-0.5 / probe 1002: already done
+G6b-transfer-0.5 / probe 1003: already done
+G6b-transfer-0.5 / probe 1004: already done
+G6a-multidt-1 / probe 1000: already done
+G6a-multidt-1 / probe 1001: already done
+G6a-multidt-1 / probe 1002: already done
+G6a-multidt-1 / probe 1003: already done
+G6a-multidt-1 / probe 1004: already done
+G6b-transfer-1 / probe 1000: already done
+G6b-transfer-1 / probe 1001: already done
+G6b-transfer-1 / probe 1002: already done
+G6b-transfer-1 / probe 1003: already done
+G6b-transfer-1 / probe 1004: already done
+G6a-multidt-2 / probe 1000: already done
+G6a-multidt-2 / probe 1001: already done
+G6a-multidt-2 / probe 1002: already done
+G6a-multidt-2 / probe 1003: already done
+G6a-multidt-2 / probe 1004: already done
+G6b-transfer-2 / probe 1000: already done
+G6b-transfer-2 / probe 1001: already done
+G6b-transfer-2 / probe 1002: already done
+G6b-transfer-2 / probe 1003: already done
+G6b-transfer-2 / probe 1004: already done
+G7-alpha-fixed / probe 1000: already done
+G7-alpha-fixed / probe 1001: already done
+G7-alpha-fixed / probe 1002: already done
+G7-alpha-fixed / probe 1003: already done
+G7-alpha-fixed / probe 1004: already done
+G8-long-rollout-extension / probe 1000: already done
+G8-long-rollout-extension / probe 1001: already done
+G8-long-rollout-extension / probe 1002: already done
+G8-long-rollout-extension / probe 1003: already done
+G8-long-rollout-extension / probe 1004: already done
+G9-cascade-long / probe 1000: already done
+G9-cascade-long / probe 1001: already done
+G9-cascade-long / probe 1002: already done
+G9-cascade-long / probe 1003: already done
+G9-cascade-long / probe 1004: already done
+G9-bandwidth-4 / probe 1000: already done
+G9-bandwidth-4 / probe 1001: already done
+G9-bandwidth-4 / probe 1002: already done
+G9-bandwidth-4 / probe 1003: already done
+G9-bandwidth-4 / probe 1004: already done
+G9-bandwidth-6 / probe 1000: already done
+G9-bandwidth-6 / probe 1001: already done
+G9-bandwidth-6 / probe 1002: already done
+G9-bandwidth-6 / probe 1003: already done
+G9-bandwidth-6 / probe 1004: already done
+G9-bandwidth-8 / probe 1000: already done
+G9-bandwidth-8 / probe 1001: already done
+G9-bandwidth-8 / probe 1002: already done
+G9-bandwidth-8 / probe 1003: already done
+G9-bandwidth-8 / probe 1004: already done
+G9-bandwidth-10 / probe 1000: already done
+G9-bandwidth-10 / probe 1001: already done
+G9-bandwidth-10 / probe 1002: already done
+G9-bandwidth-10 / probe 1003: already done
+G9-bandwidth-10 / probe 1004: already done
+G9-bandwidth-12 / probe 1000: already done
+G9-bandwidth-12 / probe 1001: already done
+G9-bandwidth-12 / probe 1002: already done
+G9-bandwidth-12 / probe 1003: already done
+G9-bandwidth-12 / probe 1004: already done
+G9-bandwidth-16 / probe 1000: already done
+G9-bandwidth-16 / probe 1001: already done
+G9-bandwidth-16 / probe 1002: already done
+G9-bandwidth-16 / probe 1003: already done
+G9-bandwidth-16 / probe 1004: already done
+G9-bandwidth-20 / probe 1000: already done
+G9-bandwidth-20 / probe 1001: already done
+G9-bandwidth-20 / probe 1002: already done
+G9-bandwidth-20 / probe 1003: already done
+G9-bandwidth-20 / probe 1004: already done
+G9-bandwidth-24 / probe 1000: already done
+G9-bandwidth-24 / probe 1001: already done
+G9-bandwidth-24 / probe 1002: already done
+G9-bandwidth-24 / probe 1003: already done
+G9-bandwidth-24 / probe 1004: already done
+G9-bandwidth-28 / probe 1000: already done
+G9-bandwidth-28 / probe 1001: already done
+G9-bandwidth-28 / probe 1002: already done
+G9-bandwidth-28 / probe 1003: already done
+G9-bandwidth-28 / probe 1004: already done
+G9-bandwidth-32 / probe 1000: already done
+G9-bandwidth-32 / probe 1001: already done
+G9-bandwidth-32 / probe 1002: already done
+G9-bandwidth-32 / probe 1003: already done
+G9-bandwidth-32 / probe 1004: already done
+Saved run: /content/drive/MyDrive/spno/hybrid-ablation/3bf81deae4ef1ff9
+
+CELL 12 OUTPUT 0
+Status: EXPLORATORY
+Completed: True | figures: 89
+
+CELL 12 OUTPUT 1
+<IPython.core.display.Image object>
+CELL 12 OUTPUT 2
+<IPython.core.display.Image object>
+CELL 12 OUTPUT 3
+<IPython.core.display.Image object>
+CELL 12 OUTPUT 4
+<IPython.core.display.Image object>
+CELL 12 OUTPUT 5
+<IPython.core.display.Image object>
+CELL 12 OUTPUT 6
+<IPython.core.display.Image object>
+CELL 12 OUTPUT 7
+<IPython.core.display.Image object>
+CELL 14 OUTPUT 0
+Temporal/spatial reference flags: 40 / 180 probe batches
+G4-bandwidth-20 probe 1000 Δt error 9.395772591830414e-07 2N error 0.005546877284294532
+G4-bandwidth-20 probe 1001 Δt error 2.772993955629483e-07 2N error 0.005442167845168067
+G4-bandwidth-20 probe 1002 Δt error 3.6990971613336e-07 2N error 0.001013347606106247
+G4-bandwidth-20 probe 1003 Δt error 3.935139628252437e-07 2N error 0.0029537840048905824
+G4-bandwidth-20 probe 1004 Δt error 3.446916721227329e-07 2N error 0.002195631697644705
+G4-bandwidth-24 probe 1000 Δt error 9.279377719399356e-07 2N error 0.007894143798899496
+G4-bandwidth-24 probe 1001 Δt error 3.4437882563309163e-07 2N error 0.007738348135125924
+G4-bandwidth-24 probe 1002 Δt error 3.617731684177167e-07 2N error 0.005145492133383101
+G4-bandwidth-24 probe 1003 Δt error 4.865874504770626e-07 2N error 0.006594621702879858
+G4-bandwidth-24 probe 1004 Δt error 3.7828418935785683e-07 2N error 0.004891822470566064
+G4-bandwidth-28 probe 1000 Δt error 1.0258610361049818e-06 2N error 0.008753166598132817
+G4-bandwidth-28 probe 1001 Δt error 3.770621904376191e-07 2N error 0.009472447363572641
+G4-bandwidth-28 probe 1002 Δt error 3.781166562894633e-07 2N error 0.007130718266002035
+G4-bandwidth-28 probe 1003 Δt error 5.206061705896137e-07 2N error 0.008170770346050753
+G4-bandwidth-28 probe 1004 Δt error 4.666502442891588e-07 2N error 0.005902880442776539
+G4-bandwidth-32 probe 1000 Δt error 1.0418147995464387e-06 2N error 0.0084580033151801
+G4-bandwidth-32 probe 1001 Δt error 4.64445104856156e-07 2N error 0.010272132146195857
+G4-bandwidth-32 probe 1002 Δt error 4.7045240129839336e-07 2N error 0.00871677856940773
+G4-bandwidth-32 probe 1003 Δt error 5.298820464671828e-07 2N error 0.013832517236479576
+G4-bandwidth-32 probe 1004 Δt error 5.770741698511703e-07 2N error 0.009008140628173065
+G9-bandwidth-20 probe 1000 Δt error 3.110822219348413e-07 2N error 0.005897341645942387
+G9-bandwidth-20 probe 1001 Δt error 3.348847350306411e-07 2N error 0.00464826645861548
+G9-bandwidth-20 probe 1002 Δt error 2.828894944330058e-07 2N error 0.003458217735392969
+G9-bandwidth-20 probe 1003 Δt error 3.366183025553877e-07 2N error 0.0029020241156424804
+G9-bandwidth-20 probe 1004 Δt error 3.3122310627464987e-07 2N error 0.0029830847931643714
+G9-bandwidth-24 probe 1000 Δt error 3.3445430539227433e-07 2N error 0.008158865439153819
+G9-bandwidth-24 probe 1001 Δt error 4.866365803286952e-07 2N error 0.0067878160282632246
+G9-bandwidth-24 probe 1002 Δt error 3.471244394312167e-07 2N error 0.00945488099483809
+G9-bandwidth-24 probe 1003 Δt error 4.6207517237183e-07 2N error 0.005669067239740379
+G9-bandwidth-24 probe 1004 Δt error 3.6866298460562654e-07 2N error 0.00609917077344685
+G9-bandwidth-28 probe 1000 Δt error 4.1287896206710335e-07 2N error 0.009094653789754454
+G9-bandwidth-28 probe 1001 Δt error 5.554646194651379e-07 2N error 0.008279724827374742
+G9-bandwidth-28 probe 1002 Δt error 3.3073448137302844e-07 2N error 0.013098755254532456
+G9-bandwidth-28 probe 1003 Δt error 4.4864231619898716e-07 2N error 0.007033122579324857
+G9-bandwidth-28 probe 1004 Δt error 4.1008226541710103e-07 2N error 0.007320931173071494
+G9-bandwidth-32 probe 1000 Δt error 5.207860125940047e-07 2N error 0.009849313041978391
+G9-bandwidth-32 probe 1001 Δt error 6.793189558980665e-07 2N error 0.008454661764883306
+G9-bandwidth-32 probe 1002 Δt error 3.625154428447548e-07 2N error 0.015171536758780843
+G9-bandwidth-32 probe 1003 Δt error 4.898914803715783e-07 2N error 0.007193261280700858
+G9-bandwidth-32 probe 1004 Δt error 4.92035560732595e-07 2N error 0.008056188649890259
+High-Nyquist-tail flags: 40
+
+Paired final-state hybrid / C1 comparisons:
+G1-interpolation base {'mean': 24.616510543777363, 'low': 18.143988367651662, 'high': 32.07761843008678} descriptive-bootstrap
+G2-extrapolation base {'mean': 4.73865310266225, 'low': 3.3775635853774317, 'high': 6.677933894802487} descriptive-bootstrap
+G3-potential-zero base {'mean': 24.85659739784162, 'low': 18.269917031814714, 'high': 32.411360998399374} descriptive-bootstrap
+G3-potential-cosine base {'mean': 24.739064540160268, 'low': 18.28542735214826, 'high': 32.073871170590344} descriptive-bootstrap
+G3-potential-well base {'mean': 24.38652443341828, 'low': 17.958652225919867, 'high': 31.50913664322738} descriptive-bootstrap
+G3-potential-short base {'mean': 24.71405503321206, 'low': 18.19941133466197, 'high': 32.21323324115411} descriptive-bootstrap
+G3-potential-strong base {'mean': 21.983283348767227, 'low': 16.274697969203636, 'high': 27.980391159120792} descriptive-bootstrap
+G4-bandwidth-4 base {'mean': 27.540054101528607, 'low': 19.85025473033409, 'high': 37.06867665127955} descriptive-bootstrap
+G4-bandwidth-6 base {'mean': 26.779773229625576, 'low': 19.772662117991654, 'high': 34.957390313072715} descriptive-bootstrap
+G4-bandwidth-8 base {'mean': 24.616510543777363, 'low': 18.143988367651662, 'high': 32.07761843008678} descriptive-bootstrap
+G4-bandwidth-10 base {'mean': 2.380564421337891, 'low': 1.8779578416892104, 'high': 2.9392621126216634} descriptive-bootstrap
+G4-bandwidth-12 base {'mean': 1.5928427036442914, 'low': 1.2921945112200148, 'high': 1.9308175784816863} descriptive-bootstrap
+G4-bandwidth-16 base {'mean': 1.1809867056909302, 'low': 0.9586126633758979, 'high': 1.4223730800314534} descriptive-bootstrap
+G4-bandwidth-20 base {'mean': 1.0267961649210948, 'low': 0.8326436609325802, 'high': 1.2251891869106835} descriptive-bootstrap
+G4-bandwidth-24 base {'mean': 0.9445577697156663, 'low': 0.7668689973781702, 'high': 1.1285360891788514} descriptive-bootstrap
+G4-bandwidth-28 base {'mean': 0.8998211783709342, 'low': 0.7306196877342923, 'high': 1.0748370599229666} descriptive-bootstrap
+G4-bandwidth-32 base {'mean': 0.8634997883414853, 'low': 0.7013420672595294, 'high': 1.0331542676695253} descriptive-bootstrap
+G6a-multidt-0.5 base {'mean': 24.61709048240724, 'low': 18.143594688778123, 'high': 32.07848997224214} descriptive-bootstrap
+G6a-multidt-0.5 G6a {'mean': 35.02357044554197, 'low': 24.736059108845804, 'high': 47.864963095986546} descriptive-bootstrap
+G6b-transfer-0.5 base {'mean': 24.61709048240724, 'low': 18.143594688778123, 'high': 32.07848997224214} descriptive-bootstrap
+G6a-multidt-1 base {'mean': 24.616510543777363, 'low': 18.143988367651662, 'high': 32.07761843008678} descriptive-bootstrap
+G6a-multidt-1 G6a {'mean': 35.021773714222896, 'low': 24.73587703905125, 'high': 47.863329955275205} descriptive-bootstrap
+G6b-transfer-1 base {'mean': 24.616510543777363, 'low': 18.143988367651662, 'high': 32.07761843008678} descriptive-bootstrap
+G6a-multidt-2 base {'mean': 24.615080680017506, 'low': 18.14813469308024, 'high': 32.07401069387972} descriptive-bootstrap
+G6a-multidt-2 G6a {'mean': 35.01670581467352, 'low': 24.7360285990053, 'high': 47.85638335079888} descriptive-bootstrap
+G6b-transfer-2 base {'mean': 24.615080680017506, 'low': 18.14813469308024, 'high': 32.07401069387972} descriptive-bootstrap
+G7-alpha-fixed base {'mean': 70.67013582088197, 'low': 41.186291260795144, 'high': 128.87800301403234} descriptive-bootstrap
+G7-alpha-fixed G7-alpha-fixed {'mean': 77.01008393266763, 'low': 44.025044801274014, 'high': 118.87417022954044} descriptive-bootstrap
+G8-long-rollout-extension base {'mean': 2.6271761933976125, 'low': 1.6629724973346487, 'high': 3.818191862046003} descriptive-bootstrap
+G9-cascade-long base {'mean': 4.352284009011762, 'low': 2.1113020944737606, 'high': 12.194368977196342} descriptive-bootstrap
+G9-bandwidth-4 base {'mean': 98.63686333960105, 'low': 57.11526975397926, 'high': 164.00783870060283} descriptive-bootstrap
+G9-bandwidth-6 base {'mean': 94.84062234990866, 'low': 51.05372193194061, 'high': 157.28508634992454} descriptive-bootstrap
+G9-bandwidth-8 base {'mean': 63.009731390319644, 'low': 30.829654223444763, 'high': 117.78737294618874} descriptive-bootstrap
+G9-bandwidth-10 base {'mean': 3.399144699457199, 'low': 1.1366122245599086, 'high': 6.413295746033242} descriptive-bootstrap
+G9-bandwidth-12 base {'mean': 2.051906671924185, 'low': 0.7741107392700969, 'high': 3.544960138190734} descriptive-bootstrap
+G9-bandwidth-16 base {'mean': 1.593025960770915, 'low': 0.6542720828712951, 'high': 2.6922294715271584} descriptive-bootstrap
+G9-bandwidth-20 base {'mean': 1.300617110836268, 'low': 0.5539967997399197, 'high': 2.1199783441525626} descriptive-bootstrap
+G9-bandwidth-24 base {'mean': 1.1862980471702742, 'low': 0.5118293720927654, 'high': 1.9096737535631105} descriptive-bootstrap
+G9-bandwidth-28 base {'mean': 1.1108877704047253, 'low': 0.4646897477501462, 'high': 1.7932119535887112} descriptive-bootstrap
+G9-bandwidth-32 base {'mean': 1.056743212832175, 'low': 0.4371536143823205, 'high': 1.706929468628662} descriptive-bootstrap
+
+Artifacts: /content/drive/MyDrive/spno/hybrid-ablation/3bf81deae4ef1ff9
+metrics.csv | paired_comparisons.csv | reference_checks.csv | summary.json | figures/ | cases/
+Settings, source hash, checkpoint hashes and convergence status: manifest.json

@@ -1,0 +1,778 @@
+
+CELL 0 code
+from google.colab import drive
+from pathlib import Path
+import json
+
+drive.mount("/content/drive")
+
+OUTPUT_ROOT = Path("/content/drive/MyDrive/spno/phase6-evaluation")
+
+for arm in ("G6a", "G6b"):
+    marker = OUTPUT_ROOT / "phase6-arms" / f"{arm}.json"
+    assert marker.is_file(), f"Missing marker: {marker}"
+
+    entry = json.loads(marker.read_text())
+    report = Path(entry["output"]) / "metrics.json"
+    assert report.is_file(), f"Missing saved results: {report}"
+
+    print(f"{arm}: saved results found ✓")
+OUTPUT
+Drive already mounted at /content/drive; to attempt to forcibly remount, call drive.mount("/content/drive", force_remount=True).
+G6a: saved results found ✓
+G6b: saved results found ✓
+
+
+CELL 1 code
+import json
+from pathlib import Path
+
+import numpy as np
+import matplotlib.pyplot as plt
+from IPython.display import display
+
+
+def load_saved_arm(arm):
+    marker = Path(OUTPUT_ROOT) / "phase6-arms" / f"{arm}.json"
+
+    if not marker.is_file():
+        raise FileNotFoundError(
+            f"{arm}: completion marker missing: {marker}"
+        )
+
+    entry = json.loads(marker.read_text())
+
+    report_path = Path(entry["output"]) / "metrics.json"
+    if not report_path.is_file():
+        raise FileNotFoundError(
+            f"{arm}: saved report missing: {report_path}"
+        )
+
+    report = json.loads(report_path.read_text())
+
+    measurements = (
+        report.get("experiments", {})
+        .get(arm, {})
+        .get("measurements", {})
+    )
+
+    if not measurements:
+        raise ValueError(
+            f"{arm}: report exists but has no measurements"
+        )
+
+    # Basic structural validation
+    for dataset, measurement in measurements.items():
+        models = measurement.get("by_model", {})
+
+        if not models:
+            raise ValueError(
+                f"{arm}/{dataset}: no model results"
+            )
+
+        for model, metrics in models.items():
+
+            # G1 / G2 use alpha curves
+            if arm in ("G1", "G2"):
+                curve = metrics.get("alpha_curve", {})
+
+                x = np.asarray(
+                    curve.get("alpha", []),
+                    dtype=float
+                )
+                y = np.asarray(
+                    curve.get("relative_error", []),
+                    dtype=float
+                )
+
+                if (
+                    x.ndim != 1
+                    or y.ndim != 1
+                    or x.size == 0
+                    or x.shape != y.shape
+                    or not np.isfinite(x).all()
+                    or not np.isfinite(y).all()
+                    or (y < 0).any()
+                ):
+                    raise ValueError(
+                        f"{arm}/{dataset}/{model}: "
+                        "invalid alpha-curve data"
+                    )
+
+            # G3 / G4 use aggregate one-step test error
+            elif arm in ("G3", "G4"):
+                value = metrics.get("one_step_test")
+
+                if value is None:
+                    raise ValueError(
+                        f"{arm}/{dataset}/{model}: "
+                        "missing one_step_test"
+                    )
+
+                value = float(value)
+
+                if not np.isfinite(value) or value < 0:
+                    raise ValueError(
+                        f"{arm}/{dataset}/{model}: "
+                        "invalid one_step_test"
+                    )
+
+    print(
+        f"{arm}: loaded {len(measurements)} test set(s), "
+        f"seeds={report.get('seeds', 'unknown')}, "
+        f"exploratory={report.get('exploratory', 'unknown')}"
+    )
+
+    return report
+
+
+saved_reports = {
+    arm: load_saved_arm(arm)
+    for arm in ("G1", "G2", "G3", "G4")
+}
+OUTPUT
+G1: loaded 1 test set(s), seeds=[0, 1, 2], exploratory=True
+G2: loaded 1 test set(s), seeds=[0, 1, 2], exploratory=True
+G3: loaded 5 test set(s), seeds=[0, 1, 2], exploratory=True
+G4: loaded 4 test set(s), seeds=[0, 1, 2], exploratory=True
+
+
+CELL 2 code
+colors = {
+    "A": "tab:blue",
+    "A-wide": "tab:orange",
+    "B-loop": "tab:green",
+    "C1": "tab:red",
+    "C2": "tab:purple",
+    "C3": "tab:brown",
+}
+
+
+fig, axes = plt.subplots(
+    2,
+    2,
+    figsize=(16, 11),
+    constrained_layout=True,
+)
+
+ax_g1, ax_g2 = axes[0]
+ax_g3, ax_g4 = axes[1]
+
+
+# ============================================================
+# G1 / G2 — alpha parameter generalization
+# ============================================================
+
+titles = {
+    "G1": "G1 — Within training parameter ranges",
+    "G2": "G2 — Wider α and β ranges",
+}
+
+g12_axes = {
+    "G1": ax_g1,
+    "G2": ax_g2,
+}
+
+g12_all_errors = []
+
+
+for arm in ("G1", "G2"):
+    ax = g12_axes[arm]
+    report = saved_reports[arm]
+
+    measurements = (
+        report["experiments"][arm]["measurements"]
+    )
+
+    # Training alpha region
+    if "alpha_train_range" in report:
+        low, high = report["alpha_train_range"]
+
+        ax.axvspan(
+            low,
+            high,
+            alpha=0.08,
+            label="Training α range",
+        )
+
+    for dataset, measurement in measurements.items():
+
+        for model, metrics in measurement["by_model"].items():
+
+            curve = metrics["alpha_curve"]
+
+            alpha = np.asarray(
+                curve["alpha"],
+                dtype=float,
+            )
+
+            error_pct = (
+                100
+                * np.asarray(
+                    curve["relative_error"],
+                    dtype=float,
+                )
+            )
+
+            error_pct = np.maximum(
+                error_pct,
+                1e-12,
+            )
+
+            g12_all_errors.extend(error_pct)
+
+            label = (
+                model
+                if len(measurements) == 1
+                else f"{model} · {dataset}"
+            )
+
+            ax.scatter(
+                alpha,
+                error_pct,
+                s=22,
+                alpha=0.75,
+                color=colors.get(model, "gray"),
+                label=label,
+            )
+
+    ax.set_title(titles[arm])
+    ax.set_xlabel("α")
+    ax.set_ylabel(
+        "One-step relative L2 error (%) — lower is better"
+    )
+    ax.set_yscale("log")
+
+    ax.grid(
+        True,
+        which="both",
+        alpha=0.18,
+    )
+
+    ax.legend(fontsize=8)
+
+
+# Give G1 and G2 EXACTLY the same y-axis scale
+if g12_all_errors:
+    g12_all_errors = np.asarray(g12_all_errors)
+
+    ymin = g12_all_errors.min()
+    ymax = g12_all_errors.max()
+
+    margin = 1.5
+
+    ax_g1.set_ylim(
+        ymin / margin,
+        ymax * margin,
+    )
+
+    ax_g2.set_ylim(
+        ymin / margin,
+        ymax * margin,
+    )
+
+
+# ============================================================
+# G3 — different potentials
+# ============================================================
+
+report = saved_reports["G3"]
+measurements = report["experiments"]["G3"]["measurements"]
+
+datasets = list(measurements)
+
+x = np.arange(len(datasets))
+
+labels = [
+    name.removeprefix("G3-potential-")
+    for name in datasets
+]
+
+model_names = list(
+    dict.fromkeys(
+        model
+        for dataset in datasets
+        for model in measurements[dataset]["by_model"]
+    )
+)
+
+
+for model in model_names:
+
+    values = np.array(
+        [
+            measurements[dataset]["by_model"][model][
+                "one_step_test"
+            ]
+            for dataset in datasets
+        ],
+        dtype=float,
+    )
+
+    ax_g3.plot(
+        x,
+        np.maximum(100 * values, 1e-12),
+        "o-",
+        label=model,
+        color=colors.get(model, "gray"),
+        linewidth=1.8,
+    )
+
+
+ax_g3.set_xticks(x, labels)
+
+ax_g3.set_title(
+    "G3 — Generalization to different potentials"
+)
+
+ax_g3.set_xlabel("Potential type")
+
+ax_g3.set_ylabel(
+    "One-step relative L2 error (%) — lower is better"
+)
+
+ax_g3.set_yscale("log")
+
+ax_g3.grid(
+    True,
+    which="both",
+    alpha=0.18,
+)
+
+ax_g3.legend(fontsize=8)
+
+
+# ============================================================
+# G4 — bandwidth generalization
+# ============================================================
+
+report = saved_reports["G4"]
+measurements = report["experiments"]["G4"]["measurements"]
+
+datasets = sorted(
+    measurements,
+    key=lambda name: int(name.rsplit("-", 1)[1]),
+)
+
+x = np.array(
+    [
+        int(name.rsplit("-", 1)[1])
+        for name in datasets
+    ]
+)
+
+model_names = list(
+    dict.fromkeys(
+        model
+        for dataset in datasets
+        for model in measurements[dataset]["by_model"]
+    )
+)
+
+
+for model in model_names:
+
+    values = np.array(
+        [
+            measurements[dataset]["by_model"][model][
+                "one_step_test"
+            ]
+            for dataset in datasets
+        ],
+        dtype=float,
+    )
+
+    ax_g4.plot(
+        x,
+        np.maximum(100 * values, 1e-12),
+        "o-",
+        label=model,
+        color=colors.get(model, "gray"),
+        linewidth=1.8,
+    )
+
+
+ax_g4.set_xticks(x)
+
+ax_g4.set_title(
+    "G4 — Generalization to higher input bandwidth"
+)
+
+ax_g4.set_xlabel("Initial bandwidth")
+
+ax_g4.set_ylabel(
+    "One-step relative L2 error (%) — lower is better"
+)
+
+ax_g4.set_yscale("log")
+
+ax_g4.grid(
+    True,
+    which="both",
+    alpha=0.18,
+)
+
+ax_g4.legend(fontsize=8)
+
+
+# ============================================================
+# Final render
+# ============================================================
+
+fig.suptitle(
+    "Phase 6 — Generalization Suite (G1–G4)",
+    fontsize=16,
+)
+
+display(fig)
+plt.close(fig)
+text/plain
+<Figure size 1600x1100 with 4 Axes>
+
+CELL 3 markdown
+# G6a
+
+
+CELL 4 code
+import json
+from pathlib import Path
+import numpy as np
+import matplotlib.pyplot as plt
+from IPython.display import display
+
+root = Path(globals().get(
+    "OUTPUT_ROOT", "/content/drive/MyDrive/spno/phase6-evaluation"
+))
+entry = json.loads((root / "phase6-arms/G6a.json").read_text())
+report = json.loads((Path(entry["output"]) / "metrics.json").read_text())
+g6a = report["experiments"]["G6a"]
+
+dts = sorted(float(dt) for dt in g6a["dt_values"])
+models = {
+    name: {float(dt): values for dt, values in item["measurements"].items()}
+    for name, item in g6a["by_model"].items()
+}
+assert dts and models, "G6a contains no measurements"
+for name, measurements in models.items():
+    assert set(dts) <= set(measurements), f"{name}: incomplete time-step sweep"
+
+palette = {"C1": "tab:red", "C2": "tab:purple", "C3": "tab:brown"}
+n_panels = 1 + len(dts)
+n_rows = (n_panels + 1) // 2
+fig, grid = plt.subplots(
+    n_rows, 2, figsize=(14, 4.5 * n_rows),
+    squeeze=False, constrained_layout=True,
+)
+axes = grid.ravel()
+
+# Full held-out one-step sweep, with seed min–max error bars.
+for name, measurements in models.items():
+    mean, low, high = [
+        100 * np.array([measurements[dt][key] for dt in dts])
+        for key in ("one_step_test", "one_step_test_min", "one_step_test_max")
+    ]
+    axes[0].errorbar(
+        dts, mean,
+        yerr=np.maximum(np.vstack([mean - low, high - mean]), 0),
+        fmt="o-", capsize=5, linewidth=2,
+        color=palette.get(name, "gray"), label=name,
+    )
+
+axes[0].set(
+    title="G6a — Complete held-out one-step sweep",
+    xlabel="Time step Δt", ylabel="Relative L2 error (%)",
+)
+axes[0].set_xticks(dts, [f"{dt:g}" for dt in dts])
+
+# Final-rollout spectral error for every saved time step.
+for ax, dt in zip(axes[1:], dts):
+    for name, measurements in models.items():
+        bands = measurements[dt]["spectral"]["banded"]
+        ax.plot(
+            list(bands),
+            np.maximum(100 * np.array(list(bands.values())), 1e-12),
+            "o-", linewidth=2,
+            color=palette.get(name, "gray"), label=name,
+        )
+    ax.set(
+        title=f"G6a — Final-rollout spectral error · Δt={dt:g}",
+        xlabel="Spatial-frequency band |k|",
+        ylabel="Band-relative L2 error (%)",
+    )
+
+for ax in axes[:n_panels]:
+    ax.set_yscale("log")
+    ax.grid(True, which="both", alpha=0.2)
+    ax.legend()
+for ax in axes[n_panels:]:
+    ax.set_visible(False)
+
+fig.suptitle(
+    "G6a — Models trained using multiple time steps\n"
+    "Seed means; one-step error bars show seed min–max"
+    + (" · Exploratory" if report.get("exploratory") else ""),
+    fontsize=14,
+)
+display(fig)
+plt.close(fig)
+text/plain
+<Figure size 1400x900 with 4 Axes>
+
+CELL 5 markdown
+# G6b
+
+CELL 6 code
+import json
+from pathlib import Path
+import numpy as np
+import matplotlib.pyplot as plt
+from IPython.display import display
+
+root = Path(globals().get(
+    "OUTPUT_ROOT", "/content/drive/MyDrive/spno/phase6-evaluation"
+))
+entry = json.loads((root / "phase6-arms/G6b.json").read_text())
+report = json.loads((Path(entry["output"]) / "metrics.json").read_text())
+g6b = report["experiments"]["G6b"]
+
+models = {
+    name: {float(dt): curve for dt, curve in item["by_dt"].items()}
+    for name, item in g6b["by_model"].items()
+}
+dts = sorted({dt for curves in models.values() for dt in curves})
+assert dts and models, "G6b contains no measurements"
+for name, curves in models.items():
+    assert set(dts) <= set(curves), f"{name}: incomplete time-step sweep"
+
+palette = {"C1": "tab:red", "C2": "tab:purple", "C3": "tab:brown"}
+fig, grid = plt.subplots(
+    1, len(dts), figsize=(5 * len(dts), 5),
+    sharey=True, squeeze=False, constrained_layout=True,
+)
+
+for ax, dt in zip(grid.ravel(), dts):
+    for name, curves in models.items():
+        curve = curves[dt]
+        residual = np.asarray(curve["residual"], dtype=float)
+        assert np.isfinite(residual).all(), f"{name}, Δt={dt}: invalid residuals"
+
+        ax.plot(
+            curve["wave_numbers"],
+            np.maximum(np.abs(residual), 1e-12),
+            linewidth=2, color=palette.get(name, "gray"), label=name,
+        )
+
+    threshold = next(iter(models.values()))[dt]["k_wrap"]
+    ax.axvline(
+        threshold, color="crimson", linestyle=":",
+        label=f"Wrapping threshold ≈ {threshold:.1f}",
+    )
+    ax.set(
+        title=f"G6b — Δt={dt:g}",
+        xlabel="Spatial frequency k",
+        ylabel="|Seed-mean frequency residual|",
+        yscale="log",
+    )
+    ax.tick_params(axis="y", labelleft=True)
+    ax.grid(True, which="both", alpha=0.2)
+    ax.legend(fontsize=9)
+
+fig.suptitle(
+    "G6b — Time-step transfer without retraining"
+    + (" · Exploratory" if report.get("exploratory") else ""),
+    fontsize=14,
+)
+display(fig)
+plt.close(fig)
+text/plain
+<Figure size 1500x500 with 3 Axes>
+
+CELL 7 code
+exec(__import__('base64').b64decode('aW1wb3J0IGpzb24KZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCl9SID0gUGF0aCgiL2NvbnRlbnQvZHJpdmUvTXlEcml2ZS9zcG5vL3BoYXNlNi1ldmFsdWF0aW9uIikKX3JlcCA9IHt9CmZvciBfbSBpbiBzb3J0ZWQoKF9SIC8gInBoYXNlNi1hcm1zIikuZ2xvYigiKi5qc29uIikpOgogICAgX2UgPSBqc29uLmxvYWRzKF9tLnJlYWRfdGV4dCgpKQogICAgX3JlcFtfZVsiYXJtIl1dID0ganNvbi5sb2FkcygoUGF0aChfZVsib3V0cHV0Il0pIC8gIm1ldHJpY3MuanNvbiIpLnJlYWRfdGV4dCgpKVsiZXhwZXJpbWVudHMiXVtfZVsiYXJtIl1dCgpkZWYgX3IoeCk6CiAgICByZXR1cm4gZmxvYXQoZiJ7eDouNGd9IikgaWYgaXNpbnN0YW5jZSh4LCBmbG9hdCkgZWxzZSB4CgpkZWYgX3JvbGwoZCk6CiAgICBvdXQgPSB7fQogICAgZm9yIGssIHYgaW4gZC5pdGVtcygpOgogICAgICAgIGlmIGlzaW5zdGFuY2UodiwgbGlzdCkgYW5kIHYgYW5kIGlzaW5zdGFuY2UodlstMV0sIChpbnQsIGZsb2F0KSk6CiAgICAgICAgICAgIG91dFtrXSA9IF9yKHZbLTFdKQogICAgICAgIGVsaWYgaXNpbnN0YW5jZSh2LCAoaW50LCBmbG9hdCkpOgogICAgICAgICAgICBvdXRba10gPSBfcih2KQogICAgcmV0dXJuIG91dAoKUyA9IHt9CmZvciBhcm0gaW4gKCJHMSIsICJHMiIsICJHMyIsICJHNCIpOgogICAgZm9yIG1uYW1lLCBtZWFzIGluIF9yZXBbYXJtXVsibWVhc3VyZW1lbnRzIl0uaXRlbXMoKToKICAgICAgICByb3cgPSB7Imtfd3JhcCI6IG1lYXMuZ2V0KCJrX3dyYXAiKSwgImhvcml6b24iOiBtZWFzLmdldCgiaG9yaXpvbiIpfQogICAgICAgIGZvciBuYW1lLCBtIGluIG1lYXNbImJ5X21vZGVsIl0uaXRlbXMoKToKICAgICAgICAgICAgcm93W25hbWVdID0gewogICAgICAgICAgICAgICAgIjFzdGVwX3NlZWRzIjogW19yKG1bInBlcl9zZWVkIl1bc11bIm9uZV9zdGVwX3Rlc3QiXSkgZm9yIHMgaW4gc29ydGVkKG1bInBlcl9zZWVkIl0pXSwKICAgICAgICAgICAgICAgICJyb2xsX3NlZWRzIjogW19yb2xsKG1bInBlcl9zZWVkIl1bc11bInJvbGxvdXQiXSkgZm9yIHMgaW4gc29ydGVkKG1bInBlcl9zZWVkIl0pXSwKICAgICAgICAgICAgICAgICJiYW5kZWQiOiB7azogX3IodikgZm9yIGssIHYgaW4gbVsic3BlY3RyYWwiXVsiYmFuZGVkIl0uaXRlbXMoKX0sCiAgICAgICAgICAgIH0KICAgICAgICBTW21uYW1lXSA9IHJvdwpTWyJHNmEiXSA9IHtuOiB7ZHQ6IFtfcih2WyJvbmVfc3RlcF90ZXN0Il0pLCBfcih2WyJvbmVfc3RlcF90ZXN0X21pbiJdKSwgX3Iodlsib25lX3N0ZXBfdGVzdF9tYXgiXSksCiAgICAgICAgICAgICAgICAgICAgIHtrOiBfcihiKSBmb3IgaywgYiBpbiB2WyJzcGVjdHJhbCJdWyJiYW5kZWQiXS5pdGVtcygpfV0KICAgICAgICAgICAgICAgIGZvciBkdCwgdiBpbiBtWyJtZWFzdXJlbWVudHMiXS5pdGVtcygpfSBmb3IgbiwgbSBpbiBfcmVwWyJHNmEiXVsiYnlfbW9kZWwiXS5pdGVtcygpfQpTWyJHNyJdID0ge2FybToge246IHsicmF0aW8iOiB7azogX3IodikgZm9yIGssIHYgaW4gbVsiYmFuZF9yYXRpbyJdLml0ZW1zKCl9LAogICAgICAgICAgICAgICAgICAgICAiYmFuZGVkIjoge2s6IF9yKHYpIGZvciBrLCB2IGluIG1bImJhbmRlZCJdLml0ZW1zKCl9fQogICAgICAgICAgICAgICAgIGZvciBuLCBtIGluIF9yZXBbIkc3Il1bYXJtXVsiYnlfbW9kZWwiXS5pdGVtcygpfSBmb3IgYXJtIGluICgidmFyeWluZ19hbHBoYSIsICJmaXhlZF9hbHBoYSIpfQpTWyJHOSJdID0ge246IFtfcih4KSBmb3IgeCBpbiBzWyJmcmFjdGlvbl9hYm92ZV9jdXRvZmYiXV0gZm9yIG4sIHMgaW4gX3JlcFsiRzkiXS5pdGVtcygpfQpTWyJHNmJfdW5zdXBwb3J0ZWQiXSA9IGxpc3QoX3JlcFsiRzZiIl0uZ2V0KCJ1bnN1cHBvcnRlZCIsIHt9KSkKcHJpbnQoanNvbi5kdW1wcyhTLCBzZXBhcmF0b3JzPSgiLCIsICI6IikpKQo=').decode())
+OUTPUT
+{"G1-interpolation":{"k_wrap":[16.899684380026944,21.184875513271905],"horizon":200,"A":{"1step_seeds":[0.000629,0.005821,0.000603],"roll_seeds":[{"steps":200,"relative_error":0.05266,"mass_drift":0.03374,"energy_drift":0.03315},{"steps":200,"relative_error":3.576,"mass_drift":422.8,"energy_drift":140500.0},{"steps":200,"relative_error":156.5,"mass_drift":1214000.0,"energy_drift":79020000000.0}],"banded":{"0-8":57.51,"8-16.8997":18.84,"16.8997+":7934.0}},"A-wide":{"1step_seeds":[0.0005762,0.0006209,0.0005437],"roll_seeds":[{"steps":200,"relative_error":0.1846,"mass_drift":0.1879,"energy_drift":0.08518},{"steps":200,"relative_error":0.04631,"mass_drift":0.03006,"energy_drift":0.03359},{"steps":200,"relative_error":0.09614,"mass_drift":0.03887,"energy_drift":0.05743}],"banded":{"0-8":0.1031,"8-16.8997":0.1652,"16.8997+":29.97}},"B-loop":{"1step_seeds":[0.0005965,0.0005644,0.0005855],"roll_seeds":[{"steps":200,"relative_error":0.04982,"mass_drift":1.549e-15,"energy_drift":0.01245},{"steps":200,"relative_error":0.09266,"mass_drift":1.834e-15,"energy_drift":0.04713},{"steps":200,"relative_error":0.233,"mass_drift":1.85e-15,"energy_drift":0.1102}],"banded":{"0-8":0.1233,"8-16.8997":0.1421,"16.8997+":87.35}},"C1":{"1step_seeds":[0.0005599,0.0005089,0.0004767],"roll_seeds":[{"steps":200,"relative_error":0.06972,"mass_drift":4.952e-14,"energy_drift":0.0007382},{"steps":200,"relative_error":0.05326,"mass_drift":4.922e-14,"energy_drift":0.0007038},{"steps":200,"relative_error":0.04804,"mass_drift":4.803e-14,"energy_drift":0.0007367}],"banded":{"0-8":0.05282,"8-16.8997":0.08916,"16.8997+":54.21}},"C2":{"1step_seeds":[0.000652,0.0006721,0.000593],"roll_seeds":[{"steps":200,"relative_error":0.09683,"mass_drift":4.787e-14,"energy_drift":0.0008573},{"steps":200,"relative_error":0.1003,"mass_drift":4.766e-14,"energy_drift":0.0007561},{"steps":200,"relative_error":0.08522,"mass_drift":4.628e-14,"energy_drift":0.0006206}],"banded":{"0-8":0.0892,"8-16.8997":0.1363,"16.8997+":62.9}},"C3":{"1step_seeds":[0.0007468,0.0006555,0.0005562],"roll_seeds":[{"steps":200,"relative_error":0.1051,"mass_drift":4.731e-14,"energy_drift":0.003409},{"steps":200,"relative_error":0.08918,"mass_drift":4.821e-14,"energy_drift":0.00336},{"steps":200,"relative_error":0.06816,"mass_drift":4.605e-14,"energy_drift":0.002376}],"banded":{"0-8":0.08206,"8-16.8997":0.1236,"16.8997+":171.9}}},"G2-extrapolation":{"k_wrap":[14.472025091165353,25.066282746310005],"horizon":200,"A":{"1step_seeds":[0.01033,0.01609,0.007065],"roll_seeds":[{"steps":200,"relative_error":17450000000.0,"mass_drift":8.016e+21,"energy_drift":6.518e+42},{"steps":200,"relative_error":2625000.0,"mass_drift":90890000000000.0,"energy_drift":7.695e+26},{"steps":200,"relative_error":56530000000.0,"mass_drift":2.845e+22,"energy_drift":3.537e+43}],"banded":{"0-8":25380000000.0,"8-14.472":13940000000.0,"14.472+":2594000000000.0}},"A-wide":{"1step_seeds":[0.004548,0.008029,0.006669],"roll_seeds":[{"steps":200,"relative_error":38510000.0,"mass_drift":5.635e+16,"energy_drift":5.402e+32},{"steps":200,"relative_error":3888.0,"mass_drift":1178000000.0,"energy_drift":1.463e+17},{"steps":200,"relative_error":20600.0,"mass_drift":14060000000.0,"energy_drift":4.45e+19}],"banded":{"0-8":13000000.0,"8-14.472":5408000.0,"14.472+":5018000000.0}},"B-loop":{"1step_seeds":[0.008715,0.008671,0.008624],"roll_seeds":[{"steps":200,"relative_error":0.647,"mass_drift":1.725e-15,"energy_drift":0.2692},{"steps":200,"relative_error":0.707,"mass_drift":1.906e-15,"energy_drift":0.2815},{"steps":200,"relative_error":0.8309,"mass_drift":2.027e-15,"energy_drift":0.3828}],"banded":{"0-8":0.6946,"8-14.472":1.087,"14.472+":105.3}},"C1":{"1step_seeds":[0.009864,0.008354,0.008001],"roll_seeds":[{"steps":200,"relative_error":0.6847,"mass_drift":5.06e-14,"energy_drift":0.001064},{"steps":200,"relative_error":0.656,"mass_drift":4.903e-14,"energy_drift":0.0009623},{"steps":200,"relative_error":0.6609,"mass_drift":5.071e-14,"energy_drift":0.0009413}],"banded":{"0-8":0.645,"8-14.472":0.7577,"14.472+":29.24}},"C2":{"1step_seeds":[0.008611,0.008206,0.008547],"roll_seeds":[{"steps":200,"relative_error":0.6581,"mass_drift":5.148e-14,"energy_drift":0.01745},{"steps":200,"relative_error":0.7289,"mass_drift":4.946e-14,"energy_drift":0.01304},{"steps":200,"relative_error":0.7353,"mass_drift":5.107e-14,"energy_drift":0.006272}],"banded":{"0-8":0.6832,"8-14.472":0.8721,"14.472+":165.4}},"C3":{"1step_seeds":[0.007037,0.01091,0.008655],"roll_seeds":[{"steps":200,"relative_error":0.6836,"mass_drift":4.707e-14,"energy_drift":2.364},{"steps":200,"relative_error":0.7918,"mass_drift":4.931e-14,"energy_drift":0.04458},{"steps":200,"relative_error":0.6811,"mass_drift":4.931e-14,"energy_drift":0.02739}],"banded":{"0-8":0.6783,"8-14.472":0.9569,"14.472+":1617.0}}},"G3-potential-zero":{"k_wrap":[16.899684380026944,21.184875513271905],"horizon":200,"A":{"1step_seeds":[0.0006118,0.005998,0.0005842],"roll_seeds":[{"steps":200,"relative_error":0.04108,"mass_drift":0.02581,"energy_drift":0.02798},{"steps":200,"relative_error":1.572,"mass_drift":5.157,"energy_drift":2.017},{"steps":200,"relative_error":5.25,"mass_drift":2560.0,"energy_drift":1917000.0}],"banded":{"0-8":2.32,"8-16.8997":1.492,"16.8997+":367.7}},"A-wide":{"1step_seeds":[0.0005503,0.0005877,0.0005179],"roll_seeds":[{"steps":200,"relative_error":0.09103,"mass_drift":0.0645,"energy_drift":0.0391},{"steps":200,"relative_error":0.04232,"mass_drift":0.02479,"energy_drift":0.02657},{"steps":200,"relative_error":0.06087,"mass_drift":0.02779,"energy_drift":0.04187}],"banded":{"0-8":0.06029,"8-16.8997":0.1067,"16.8997+":13.14}},"B-loop":{"1step_seeds":[0.0005855,0.0005518,0.0005722],"roll_seeds":[{"steps":200,"relative_error":0.03744,"mass_drift":1.585e-15,"energy_drift":0.01131},{"steps":200,"relative_error":0.05378,"mass_drift":2.078e-15,"energy_drift":0.02007},{"steps":200,"relative_error":0.1461,"mass_drift":2.155e-15,"energy_drift":0.06493}],"banded":{"0-8":0.07788,"8-16.8997":0.0902,"16.8997+":42.44}},"C1":{"1step_seeds":[0.0005547,0.0005192,0.0004911],"roll_seeds":[{"steps":200,"relative_error":0.06192,"mass_drift":4.913e-14,"energy_drift":0.0007934},{"steps":200,"relative_error":0.04777,"mass_drift":5.047e-14,"energy_drift":0.0007562},{"steps":200,"relative_error":0.04331,"mass_drift":4.86e-14,"energy_drift":0.0007816}],"banded":{"0-8":0.04745,"8-16.8997":0.07528,"16.8997+":45.29}},"C2":{"1step_seeds":[0.0006335,0.0006468,0.00056],"roll_seeds":[{"steps":200,"relative_error":0.08774,"mass_drift":4.885e-14,"energy_drift":0.0008326},{"steps":200,"relative_error":0.08931,"mass_drift":4.776e-14,"energy_drift":0.0007471},{"steps":200,"relative_error":0.07176,"mass_drift":4.909e-14,"energy_drift":0.0005848}],"banded":{"0-8":0.07956,"8-16.8997":0.1122,"16.8997+":51.95}},"C3":{"1step_seeds":[0.0007075,0.0006111,0.0005269],"roll_seeds":[{"steps":200,"relative_error":0.09429,"mass_drift":4.828e-14,"energy_drift":0.002807},{"steps":200,"relative_error":0.07708,"mass_drift":4.933e-14,"energy_drift":0.00318},{"steps":200,"relative_error":0.05919,"mass_drift":4.768e-14,"energy_drift":0.002156}],"banded":{"0-8":0.07182,"8-16.8997":0.1158,"16.8997+":144.6}}},"G3-potential-cosine":{"k_wrap":[16.899684380026944,21.184875513271905],"horizon":200,"A":{"1step_seeds":[0.0006528,0.005889,0.0006108],"roll_seeds":[{"steps":200,"relative_error":0.04031,"mass_drift":0.02523,"energy_drift":0.02898},{"steps":200,"relative_error":1.612,"mass_drift":13.59,"energy_drift":38.15},{"steps":200,"relative_error":0.2144,"mass_drift":0.8636,"energy_drift":0.2797}],"banded":{"0-8":0.6282,"8-16.8997":0.5883,"16.8997+":68.78}},"A-wide":{"1step_seeds":[0.0005824,0.0006345,0.0005531],"roll_seeds":[{"steps":200,"relative_error":0.08682,"mass_drift":0.04044,"energy_drift":0.02439},{"steps":200,"relative_error":0.04114,"mass_drift":0.02867,"energy_drift":0.02633},{"steps":200,"relative_error":0.05764,"mass_drift":0.02306,"energy_drift":0.03181}],"banded":{"0-8":0.05748,"8-16.8997":0.1032,"16.8997+":8.178}},"B-loop":{"1step_seeds":[0.0006103,0.000582,0.0005854],"roll_seeds":[{"steps":200,"relative_error":0.03475,"mass_drift":1.513e-15,"energy_drift":0.012},{"steps":200,"relative_error":0.04291,"mass_drift":2.133e-15,"energy_drift":0.01863},{"steps":200,"relative_error":0.127,"mass_drift":2.032e-15,"energy_drift":0.05363}],"banded":{"0-8":0.06667,"8-16.8997":0.08939,"16.8997+":20.97}},"C1":{"1step_seeds":[0.000568,0.0005362,0.0005091],"roll_seeds":[{"steps":200,"relative_error":0.05794,"mass_drift":4.717e-14,"energy_drift":0.0006736},{"steps":200,"relative_error":0.04419,"mass_drift":4.894e-14,"energy_drift":0.0006763},{"steps":200,"relative_error":0.04045,"mass_drift":4.781e-14,"energy_drift":0.000628}],"banded":{"0-8":0.04405,"8-16.8997":0.07632,"16.8997+":45.84}},"C2":{"1step_seeds":[0.0006416,0.0006545,0.0005719],"roll_seeds":[{"steps":200,"relative_error":0.08236,"mass_drift":4.688e-14,"energy_drift":0.0008063},{"steps":200,"relative_error":0.084,"mass_drift":4.921e-14,"energy_drift":0.0008781},{"steps":200,"relative_error":0.06863,"mass_drift":5.057e-14,"energy_drift":0.0007913}],"banded":{"0-8":0.07474,"8-16.8997":0.1084,"16.8997+":41.03}},"C3":{"1step_seeds":[0.0006592,0.0006056,0.0005278],"roll_seeds":[{"steps":200,"relative_error":0.08325,"mass_drift":4.811e-14,"energy_drift":0.002786},{"steps":200,"relative_error":0.07092,"mass_drift":4.92e-14,"energy_drift":0.003071},{"steps":200,"relative_error":0.05545,"mass_drift":4.945e-14,"energy_drift":0.002203}],"banded":{"0-8":0.06539,"8-16.8997":0.1083,"16.8997+":87.91}}},"G3-potential-well":{"k_wrap":[16.899684380026944,21.184875513271905],"horizon":200,"A":{"1step_seeds":[0.0005889,0.005792,0.0005628],"roll_seeds":[{"steps":200,"relative_error":0.04109,"mass_drift":0.02514,"energy_drift":0.0274},{"steps":200,"relative_error":1.876,"mass_drift":24.51,"energy_drift":446.2},{"steps":200,"relative_error":109.6,"mass_drift":538000.0,"energy_drift":71110000000.0}],"banded":{"0-8":37.75,"8-16.8997":32.61,"16.8997+":7103.0}},"A-wide":{"1step_seeds":[0.0005348,0.000574,0.0005083],"roll_seeds":[{"steps":200,"relative_error":0.1564,"mass_drift":0.1612,"energy_drift":0.3627},{"steps":200,"relative_error":0.04024,"mass_drift":0.02441,"energy_drift":0.02626},{"steps":200,"relative_error":0.09893,"mass_drift":0.04496,"energy_drift":0.08878}],"banded":{"0-8":0.0906,"8-16.8997":0.1981,"16.8997+":35.86}},"B-loop":{"1step_seeds":[0.0005533,0.0005233,0.0005416],"roll_seeds":[{"steps":200,"relative_error":0.0354,"mass_drift":1.783e-15,"energy_drift":0.01228},{"steps":200,"relative_error":0.04421,"mass_drift":2.147e-15,"energy_drift":0.01533},{"steps":200,"relative_error":0.1413,"mass_drift":1.851e-15,"energy_drift":0.05706}],"banded":{"0-8":0.07192,"8-16.8997":0.09285,"16.8997+":34.03}},"C1":{"1step_seeds":[0.0005154,0.0004749,0.0004447],"roll_seeds":[{"steps":200,"relative_error":0.0628,"mass_drift":4.748e-14,"energy_drift":0.0007919},{"steps":200,"relative_error":0.04782,"mass_drift":4.671e-14,"energy_drift":0.0007177},{"steps":200,"relative_error":0.04339,"mass_drift":4.87e-14,"energy_drift":0.0007642}],"banded":{"0-8":0.04782,"8-16.8997":0.07949,"16.8997+":44.09}},"C2":{"1step_seeds":[0.0005956,0.0006044,0.0005215],"roll_seeds":[{"steps":200,"relative_error":0.08712,"mass_drift":4.791e-14,"energy_drift":0.0007098},{"steps":200,"relative_error":0.08851,"mass_drift":4.617e-14,"energy_drift":0.0006445},{"steps":200,"relative_error":0.07177,"mass_drift":4.592e-14,"energy_drift":0.0007044}],"banded":{"0-8":0.07973,"8-16.8997":0.111,"16.8997+":48.89}},"C3":{"1step_seeds":[0.0006567,0.000584,0.0004883],"roll_seeds":[{"steps":200,"relative_error":0.08952,"mass_drift":4.763e-14,"energy_drift":0.002937},{"steps":200,"relative_error":0.07672,"mass_drift":4.837e-14,"energy_drift":0.002823},{"steps":200,"relative_error":0.0571,"mass_drift":4.729e-14,"energy_drift":0.00215}],"banded":{"0-8":0.07044,"8-16.8997":0.1059,"16.8997+":107.9}}},"G3-potential-short":{"k_wrap":[16.899684380026944,21.184875513271905],"horizon":200,"A":{"1step_seeds":[0.001934,0.006359,0.00248],"roll_seeds":[{"steps":200,"relative_error":0.05477,"mass_drift":0.02608,"energy_drift":0.02746},{"steps":200,"relative_error":3.398,"mass_drift":289.3,"energy_drift":202100.0},{"steps":200,"relative_error":53.46,"mass_drift":275200.0,"energy_drift":2199000000.0}],"banded":{"0-8":19.35,"8-16.8997":11.17,"16.8997+":63400.0}},"A-wide":{"1step_seeds":[0.001504,0.001743,0.003501],"roll_seeds":[{"steps":200,"relative_error":0.09815,"mass_drift":0.04369,"energy_drift":0.04176},{"steps":200,"relative_error":0.07877,"mass_drift":0.03307,"energy_drift":0.02837},{"steps":200,"relative_error":0.07311,"mass_drift":0.02635,"energy_drift":0.0325}],"banded":{"0-8":0.08151,"8-16.8997":0.0997,"16.8997+":19.29}},"B-loop":{"1step_seeds":[0.001739,0.001204,0.002003],"roll_seeds":[{"steps":200,"relative_error":0.04482,"mass_drift":1.704e-15,"energy_drift":0.0149},{"steps":200,"relative_error":0.09378,"mass_drift":2.371e-15,"energy_drift":0.03441},{"steps":200,"relative_error":0.2052,"mass_drift":2.028e-15,"energy_drift":0.08871}],"banded":{"0-8":0.1149,"8-16.8997":0.1079,"16.8997+":35.01}},"C1":{"1step_seeds":[0.0005455,0.0005149,0.0004859],"roll_seeds":[{"steps":200,"relative_error":0.06205,"mass_drift":4.671e-14,"energy_drift":0.000602},{"steps":200,"relative_error":0.04808,"mass_drift":4.857e-14,"energy_drift":0.0005706},{"steps":200,"relative_error":0.04388,"mass_drift":4.893e-14,"energy_drift":0.0006039}],"banded":{"0-8":0.04837,"8-16.8997":0.07851,"16.8997+":46.61}},"C2":{"1step_seeds":[0.0008098,0.0008267,0.0007521],"roll_seeds":[{"steps":200,"relative_error":0.08917,"mass_drift":4.875e-14,"energy_drift":0.001031},{"steps":200,"relative_error":0.09224,"mass_drift":4.673e-14,"energy_drift":0.001134},{"steps":200,"relative_error":0.07655,"mass_drift":4.593e-14,"energy_drift":0.0009713}],"banded":{"0-8":0.08346,"8-16.8997":0.1154,"16.8997+":40.51}},"C3":{"1step_seeds":[0.000889,0.0008227,0.0007397],"roll_seeds":[{"steps":200,"relative_error":0.09727,"mass_drift":4.746e-14,"energy_drift":0.003278},{"steps":200,"relative_error":0.08186,"mass_drift":4.855e-14,"energy_drift":0.002711},{"steps":200,"relative_error":0.06245,"mass_drift":4.76e-14,"energy_drift":0.002106}],"banded":{"0-8":0.07545,"8-16.8997":0.1176,"16.8997+":94.81}}},"G3-potential-strong":{"k_wrap":[16.899684380026944,21.184875513271905],"horizon":200,"A":{"1step_seeds":[0.0006937,0.006002,0.0006387],"roll_seeds":[{"steps":200,"relative_error":0.05721,"mass_drift":0.05279,"energy_drift":0.05158},{"steps":200,"relative_error":1.917,"mass_drift":24.27,"energy_drift":128.3},{"steps":200,"relative_error":1217.0,"mass_drift":148000000.0,"energy_drift":7320000000000000.0}],"banded":{"0-8":401.6,"8-16.8997":1132.0,"16.8997+":63670.0}},"A-wide":{"1step_seeds":[0.0006216,0.0006799,0.0005843],"roll_seeds":[{"steps":200,"relative_error":0.6481,"mass_drift":9.73,"energy_drift":18.29},{"steps":200,"relative_error":0.06128,"mass_drift":0.05916,"energy_drift":0.05462},{"steps":200,"relative_error":0.09534,"mass_drift":0.04436,"energy_drift":0.08544}],"banded":{"0-8":0.2619,"8-16.8997":0.4009,"16.8997+":260.9}},"B-loop":{"1step_seeds":[0.0006363,0.0006113,0.0006186],"roll_seeds":[{"steps":200,"relative_error":0.04376,"mass_drift":1.942e-15,"energy_drift":0.01478},{"steps":200,"relative_error":0.09469,"mass_drift":2.051e-15,"energy_drift":0.03474},{"steps":200,"relative_error":0.1392,"mass_drift":2.028e-15,"energy_drift":0.06439}],"banded":{"0-8":0.09156,"8-16.8997":0.1025,"16.8997+":104.9}},"C1":{"1step_seeds":[0.0005348,0.0005424,0.0004855],"roll_seeds":[{"steps":200,"relative_error":0.05931,"mass_drift":5.186e-14,"energy_drift":0.0008782},{"steps":200,"relative_error":0.05075,"mass_drift":4.863e-14,"energy_drift":0.0009208},{"steps":200,"relative_error":0.04452,"mass_drift":5.075e-14,"energy_drift":0.0008056}],"banded":{"0-8":0.0476,"8-16.8997":0.08318,"16.8997+":67.26}},"C2":{"1step_seeds":[0.0005885,0.0005969,0.0005151],"roll_seeds":[{"steps":200,"relative_error":0.08149,"mass_drift":4.974e-14,"energy_drift":0.0007126},{"steps":200,"relative_error":0.08205,"mass_drift":4.943e-14,"energy_drift":0.0007352},{"steps":200,"relative_error":0.06683,"mass_drift":4.984e-14,"energy_drift":0.0005893}],"banded":{"0-8":0.07311,"8-16.8997":0.1085,"16.8997+":73.45}},"C3":{"1step_seeds":[0.000632,0.0005685,0.0004845],"roll_seeds":[{"steps":200,"relative_error":0.08324,"mass_drift":5.109e-14,"energy_drift":0.003115},{"steps":200,"relative_error":0.07143,"mass_drift":5.055e-14,"energy_drift":0.002659},{"steps":200,"relative_error":0.05401,"mass_drift":4.848e-14,"energy_drift":0.002057}],"banded":{"0-8":0.06386,"8-16.8997":0.1126,"16.8997+":201.1}}},"G4-bandwidth-12":{"k_wrap":[16.899684380026944,21.184875513271905],"horizon":200,"A":{"1step_seeds":[0.1723,0.1361,0.1441],"roll_seeds":[{"steps":200,"relative_error":8.628e+18,"mass_drift":2.093e+38,"energy_drift":4.69e+74},{"steps":200,"relative_error":3917000.0,"mass_drift":216000000000000.0,"energy_drift":4.705e+27},{"steps":200,"relative_error":4562000000000.0,"mass_drift":1.133e+26,"energy_drift":2.3e+50}],"banded":{"0-12":2.948e+18,"12-16.8997":64090000000.0,"16.8997+":1277000000000000.0}},"A-wide":{"1step_seeds":[0.1496,0.1896,0.14],"roll_seeds":[{"steps":200,"relative_error":5789000000000000.0,"mass_drift":1.077e+32,"energy_drift":1.466e+62},{"steps":200,"relative_error":3.197e+18,"mass_drift":1.671e+37,"energy_drift":1.217e+72},{"steps":200,"relative_error":159300000.0,"mass_drift":2.245e+17,"energy_drift":2.188e+33}],"banded":{"0-12":1.093e+18,"12-16.8997":34890000000.0,"16.8997+":2705000000000000.0}},"B-loop":{"1step_seeds":[0.1356,0.2169,0.1816],"roll_seeds":[{"steps":200,"relative_error":1.364,"mass_drift":1.614e-15,"energy_drift":0.7813},{"steps":200,"relative_error":1.097,"mass_drift":1.906e-15,"energy_drift":0.556},{"steps":200,"relative_error":1.103,"mass_drift":1.827e-15,"energy_drift":0.7392}],"banded":{"0-12":1.194,"12-16.8997":1.013,"16.8997+":92.93}},"C1":{"1step_seeds":[0.1226,0.1236,0.12],"roll_seeds":[{"steps":200,"relative_error":0.5972,"mass_drift":5.007e-14,"energy_drift":0.006755},{"steps":200,"relative_error":0.6011,"mass_drift":5.132e-14,"energy_drift":0.006762},{"steps":200,"relative_error":0.6125,"mass_drift":4.923e-14,"energy_drift":0.006792}],"banded":{"0-12":0.5324,"12-16.8997":1.372,"16.8997+":76.39}},"C2":{"1step_seeds":[0.1272,0.129,0.1231],"roll_seeds":[{"steps":200,"relative_error":0.6486,"mass_drift":4.938e-14,"energy_drift":0.004551},{"steps":200,"relative_error":0.6603,"mass_drift":5.074e-14,"energy_drift":0.004368},{"steps":200,"relative_error":0.6541,"mass_drift":5.085e-14,"energy_drift":0.004306}],"banded":{"0-12":0.605,"12-16.8997":1.245,"16.8997+":113.6}},"C3":{"1step_seeds":[0.2376,0.1521,0.1256],"roll_seeds":[{"steps":200,"relative_error":1.408,"mass_drift":4.156e-14,"energy_drift":5.34},{"steps":200,"relative_error":1.372,"mass_drift":5.102e-14,"energy_drift":1.521},{"steps":200,"relative_error":1.413,"mass_drift":4.925e-14,"energy_drift":1.048}],"banded":{"0-12":1.313,"12-16.8997":1.921,"16.8997+":11780.0}}},"G4-bandwidth-16":{"k_wrap":[16.899684380026944,21.184875513271905],"horizon":200,"A":{"1step_seeds":[0.3109,0.3367,0.3023],"roll_seeds":[{"steps":200,"relative_error":1.501e+19,"mass_drift":7.769e+38,"energy_drift":3.327e+75},{"steps":200,"relative_error":4578000.0,"mass_drift":395900000000000.0,"energy_drift":1.396e+28},{"steps":200,"relative_error":7023000000000.0,"mass_drift":2.468e+26,"energy_drift":3.909e+50}],"banded":{"0-16":5.081e+18,"16-16.8997":10560000000.0,"16.8997+":47840000000000.0}},"A-wide":{"1step_seeds":[0.2745,0.307,0.2337],"roll_seeds":[{"steps":200,"relative_error":3771000000000000.0,"mass_drift":8.352e+31,"energy_drift":6.442e+61},{"steps":200,"relative_error":2.339e+18,"mass_drift":1.107e+37,"energy_drift":3.909e+71},{"steps":200,"relative_error":53110000.0,"mass_drift":2.726e+16,"energy_drift":1.099e+31}],"banded":{"0-16":7.918e+17,"16-16.8997":1303000000.0,"16.8997+":289900000000000.0}},"B-loop":{"1step_seeds":[0.2906,0.3936,0.3517],"roll_seeds":[{"steps":200,"relative_error":1.395,"mass_drift":1.615e-15,"energy_drift":0.8813},{"steps":200,"relative_error":1.215,"mass_drift":1.756e-15,"energy_drift":0.7458},{"steps":200,"relative_error":1.186,"mass_drift":1.7e-15,"energy_drift":0.8636}],"banded":{"0-16":1.273,"16-16.8997":1.0,"16.8997+":5.364}},"C1":{"1step_seeds":[0.4302,0.4315,0.4268],"roll_seeds":[{"steps":200,"relative_error":0.834,"mass_drift":5.17e-14,"energy_drift":0.008587},{"steps":200,"relative_error":0.8533,"mass_drift":4.962e-14,"energy_drift":0.008407},{"steps":200,"relative_error":0.8296,"mass_drift":5.075e-14,"energy_drift":0.008631}],"banded":{"0-16":0.8166,"16-16.8997":1.236,"16.8997+":44.59}},"C2":{"1step_seeds":[0.4352,0.4375,0.4301],"roll_seeds":[{"steps":200,"relative_error":0.883,"mass_drift":4.945e-14,"energy_drift":0.005268},{"steps":200,"relative_error":0.8545,"mass_drift":4.992e-14,"energy_drift":0.00526},{"steps":200,"relative_error":0.8616,"mass_drift":5.205e-14,"energy_drift":0.005094}],"banded":{"0-16":0.84,"16-16.8997":1.301,"16.8997+":36.26}},"C3":{"1step_seeds":[0.632,0.4159,0.3988],"roll_seeds":[{"steps":200,"relative_error":1.402,"mass_drift":3.877e-14,"energy_drift":2.536},{"steps":200,"relative_error":1.396,"mass_drift":5.187e-14,"energy_drift":0.8896},{"steps":200,"relative_error":1.397,"mass_drift":5.102e-14,"energy_drift":1.038}],"banded":{"0-16":1.313,"16-16.8997":1.374,"16.8997+":745.6}}},"G4-bandwidth-20":{"k_wrap":[16.899684380026944,21.184875513271905],"horizon":200,"A":{"1step_seeds":[0.5279,0.5394,0.5202],"roll_seeds":[{"steps":200,"relative_error":1.188e+19,"mass_drift":3.887e+38,"energy_drift":7.549e+74},{"steps":200,"relative_error":8423000.0,"mass_drift":2054000000000000.0,"energy_drift":1.221e+29},{"steps":200,"relative_error":5690000000000.0,"mass_drift":1.661e+26,"energy_drift":1.877e+50}],"banded":{"0-20":4.004e+18,"16.8997+":94680000000.0}},"A-wide":{"1step_seeds":[0.4075,0.4538,0.3644],"roll_seeds":[{"steps":200,"relative_error":2343000000000000.0,"mass_drift":2.301e+31,"energy_drift":2.12e+60},{"steps":200,"relative_error":2.195e+18,"mass_drift":9.038e+36,"energy_drift":1.522e+71},{"steps":200,"relative_error":101600000.0,"mass_drift":1.249e+17,"energy_drift":3.071e+32}],"banded":{"0-20":7.413e+17,"16.8997+":912100000000.0}},"B-loop":{"1step_seeds":[0.5215,0.5831,0.5556],"roll_seeds":[{"steps":200,"relative_error":1.384,"mass_drift":1.785e-15,"energy_drift":0.9223},{"steps":200,"relative_error":1.259,"mass_drift":1.93e-15,"energy_drift":0.8306},{"steps":200,"relative_error":1.201,"mass_drift":1.815e-15,"energy_drift":0.9135}],"banded":{"0-20":1.287,"16.8997+":1.0}},"C1":{"1step_seeds":[0.7387,0.7398,0.7357],"roll_seeds":[{"steps":200,"relative_error":0.9627,"mass_drift":4.742e-14,"energy_drift":0.009591},{"steps":200,"relative_error":0.9752,"mass_drift":4.893e-14,"energy_drift":0.009639},{"steps":200,"relative_error":0.9401,"mass_drift":4.881e-14,"energy_drift":0.009575}],"banded":{"0-20":0.9463,"16.8997+":1.364}},"C2":{"1step_seeds":[0.7438,0.7463,0.739],"roll_seeds":[{"steps":200,"relative_error":0.9862,"mass_drift":4.879e-14,"energy_drift":0.005556},{"steps":200,"relative_error":0.9758,"mass_drift":4.888e-14,"energy_drift":0.00566},{"steps":200,"relative_error":0.9832,"mass_drift":4.926e-14,"energy_drift":0.005281}],"banded":{"0-20":0.9668,"16.8997+":1.413}},"C3":{"1step_seeds":[0.8526,0.6898,0.7048],"roll_seeds":[{"steps":200,"relative_error":1.414,"mass_drift":3.947e-14,"energy_drift":1.293},{"steps":200,"relative_error":1.396,"mass_drift":5.119e-14,"energy_drift":0.4917},{"steps":200,"relative_error":1.388,"mass_drift":5.07e-14,"energy_drift":0.7281}],"banded":{"0-20":1.329,"16.8997+":1.898}}},"G4-bandwidth-24":{"k_wrap":[16.899684380026944,21.184875513271905],"horizon":200,"A":{"1step_seeds":[0.629,0.6318,0.6219],"roll_seeds":[{"steps":200,"relative_error":9.676e+18,"mass_drift":3.636e+38,"energy_drift":7.55e+74},{"steps":200,"relative_error":6054000.0,"mass_drift":1055000000000000.0,"energy_drift":2.084e+28},{"steps":200,"relative_error":3794000000000.0,"mass_drift":7.261e+25,"energy_drift":1.705e+49}],"banded":{"0-24":3.265e+18,"16.8997+":43490000000.0}},"A-wide":{"1step_seeds":[0.5078,0.5478,0.4788],"roll_seeds":[{"steps":200,"relative_error":1469000000000000.0,"mass_drift":1.474e+31,"energy_drift":9.746e+59},{"steps":200,"relative_error":1.835e+18,"mass_drift":5.802e+36,"energy_drift":6.098e+70},{"steps":200,"relative_error":94690000.0,"mass_drift":2.26e+17,"energy_drift":1.333e+33}],"banded":{"0-24":6.196e+17,"16.8997+":548500000000.0}},"B-loop":{"1step_seeds":[0.6392,0.6861,0.6639],"roll_seeds":[{"steps":200,"relative_error":1.376,"mass_drift":1.679e-15,"energy_drift":0.9507},{"steps":200,"relative_error":1.253,"mass_drift":2.192e-15,"energy_drift":0.8913},{"steps":200,"relative_error":1.214,"mass_drift":1.74e-15,"energy_drift":0.9409}],"banded":{"0-24":1.287,"16.8997+":1.0}},"C1":{"1step_seeds":[0.9222,0.9229,0.9201],"roll_seeds":[{"steps":200,"relative_error":1.022,"mass_drift":4.665e-14,"energy_drift":0.007782},{"steps":200,"relative_error":1.031,"mass_drift":4.696e-14,"energy_drift":0.007995},{"steps":200,"relative_error":1.035,"mass_drift":4.712e-14,"energy_drift":0.007883}],"banded":{"0-24":1.016,"16.8997+":1.394}},"C2":{"1step_seeds":[0.9263,0.9284,0.9228],"roll_seeds":[{"steps":200,"relative_error":1.031,"mass_drift":4.771e-14,"energy_drift":0.004524},{"steps":200,"relative_error":1.043,"mass_drift":4.813e-14,"energy_drift":0.003816},{"steps":200,"relative_error":1.045,"mass_drift":4.742e-14,"energy_drift":0.004207}],"banded":{"0-24":1.029,"16.8997+":1.39}},"C3":{"1step_seeds":[0.9987,0.8929,0.9015],"roll_seeds":[{"steps":200,"relative_error":1.411,"mass_drift":4.112e-14,"energy_drift":0.5808},{"steps":200,"relative_error":1.384,"mass_drift":4.972e-14,"energy_drift":0.2868},{"steps":200,"relative_error":1.348,"mass_drift":4.992e-14,"energy_drift":0.417}],"banded":{"0-24":1.337,"16.8997+":1.583}}},"G6a":{"C1":{"0.005":[0.0002101,0.0001986,0.0002219,{"0-8":0.01667,"8-23.8998":0.03207,"23.8998+":1138.0}],"0.01":[0.000414,0.0003908,0.0004377,{"0-8":0.0329,"8-16.8997":0.0448,"16.8997+":43.29}],"0.02":[0.0007962,0.0007492,0.0008435,{"0-8":0.06529,"8-11.9499":0.05806,"11.9499+":23.15}]},"C2":{"0.005":[0.0001862,0.0001746,0.0001999,{"0-8":0.01488,"8-23.8998":0.03617,"23.8998+":2248.0}],"0.01":[0.0003629,0.0003392,0.0003906,{"0-8":0.02964,"8-16.8997":0.06207,"16.8997+":21.76}],"0.02":[0.0006706,0.000621,0.0007279,{"0-8":0.05916,"8-11.9499":0.1042,"11.9499+":14.86}]},"C3":{"0.005":[0.0003493,0.0001708,0.0005329,{"0-8":0.04166,"8-23.8998":0.08254,"23.8998+":12340.0}],"0.01":[0.0006895,0.0003257,0.001061,{"0-8":0.08256,"8-16.8997":0.1561,"16.8997+":76.69}],"0.02":[0.001339,0.000594,0.002089,{"0-8":0.1688,"8-11.9499":0.3096,"11.9499+":103.7}]}},"G7":{"varying_alpha":{"A":{"ratio":{"mean":159.0,"min":92.94,"max":224.1},"banded":{"0-8":0.9152,"8-18.6833":0.3892,"18.6833+":87.37}},"C1":{"ratio":{"mean":3650.0,"min":3211.0,"max":3910.0},"banded":{"0-8":0.02003,"8-18.6833":0.06282,"18.6833+":72.39}},"C2":{"ratio":{"mean":859.0,"min":801.4,"max":968.7},"banded":{"0-8":0.05587,"8-18.6833":0.05756,"18.6833+":47.15}}},"fixed_alpha":{"A":{"ratio":{"mean":274.0,"min":229.0,"max":319.2},"banded":{"0-8":0.02843,"8-18.6833":0.04493,"18.6833+":7.783}},"C1":{"ratio":{"mean":2746.0,"min":1659.0,"max":3586.0},"banded":{"0-8":0.02484,"8-18.6833":0.05771,"18.6833+":65.36}},"C2":{"ratio":{"mean":606.1,"min":410.9,"max":867.5},"banded":{"0-8":0.1676,"8-18.6833":0.2065,"18.6833+":81.1}}}},"G9":{"reference":[2.751e-32,7.195e-06,7.74e-06,1.1e-05,1.093e-05,1.014e-05,1.138e-05,8.719e-06,1.131e-05],"A":[2.751e-32,1.036e-05,1.119e-05,1.743e-05,1.54e-05,1.718e-05,1.827e-05,2.645e-05,3.343e-05],"A-wide":[2.751e-32,6.097e-06,7.109e-06,1.02e-05,9.06e-06,8.851e-06,9.025e-06,8.313e-06,8.508e-06],"B-loop":[2.751e-32,5.897e-06,7.81e-06,9.411e-06,1.045e-05,1.27e-05,1.124e-05,1.059e-05,1.406e-05],"C1":[2.751e-32,2.836e-05,4.913e-05,7.121e-05,8.962e-05,0.0001152,0.0001321,0.0001407,0.0001632],"C2":[2.751e-32,2.026e-05,3.312e-05,5.409e-05,7.024e-05,8.905e-05,0.0001056,0.0001194,0.0001358],"C3":[2.751e-32,1.363e-05,1.992e-05,2.828e-05,3.492e-05,3.873e-05,3.654e-05,3.799e-05,3.995e-05]},"G6b_unsupported":["A","A-wide","B-loop"]}
+
+
+CELL 8 code
+import json
+from pathlib import Path
+import numpy as np
+import matplotlib.pyplot as plt
+from IPython.display import display
+
+root = Path(globals().get(
+    "OUTPUT_ROOT", "/content/drive/MyDrive/spno/phase6-evaluation"
+))
+entry = json.loads((root / "phase6-arms/G7.json").read_text())
+report = json.loads((Path(entry["output"]) / "metrics.json").read_text())
+g7 = report["experiments"]["G7"]
+
+palette = {"A": "tab:blue", "C1": "tab:red", "C2": "tab:purple"}
+conditions = [
+    ("varying_alpha", "Varying α training", "-", "tab:blue"),
+    ("fixed_alpha", "Fixed α training", "--", "tab:orange"),
+]
+names = list(g7["varying_alpha"]["band_ratio"])
+
+fig, axes = plt.subplots(
+    1, 2, figsize=(15, 5), constrained_layout=True
+)
+
+for j, (key, label, style, bar_color) in enumerate(conditions):
+    results = g7[key]
+
+    # Final-rollout relative errors within each frequency band.
+    for name in names:
+        bands = results["banded"][name]
+        axes[0].plot(
+            list(bands),
+            np.maximum(100 * np.array(list(bands.values())), 1e-12),
+            marker="o", linestyle=style, linewidth=2,
+            color=palette.get(name, "gray"),
+            label=f"{name} · {label}",
+        )
+
+    # Compare high-frequency error relative to low-frequency error.
+    stats = [results["by_model"][name]["band_ratio"] for name in names]
+    mean = np.array([s["mean"] for s in stats])
+    low = np.array([s["min"] for s in stats])
+    high = np.array([s["max"] for s in stats])
+    positions = np.arange(len(names)) + (-0.18 if j == 0 else 0.18)
+
+    axes[1].bar(
+        positions, mean, width=0.36,
+        yerr=np.maximum(np.vstack([mean - low, high - mean]), 0),
+        capsize=4, color=bar_color, label=label,
+    )
+
+axes[0].set(
+    title="G7 — Final-rollout errors by frequency band",
+    xlabel="Spatial-frequency band |k|",
+    ylabel="Band-relative L2 error (%)",
+    yscale="log",
+)
+axes[1].set(
+    title="G7 — High/low error ratio",
+    xlabel="Model",
+    ylabel="High-band relative error / low-band relative error",
+)
+axes[1].set_xticks(np.arange(len(names)), names)
+
+for ax in axes:
+    ax.grid(True, which="both", alpha=0.18)
+    ax.legend(fontsize=8)
+
+fig.suptitle(
+    "G7 — Effect of α variation during training\n"
+    "Seed means; ratio error bars show seed min–max"
+    + (" · Exploratory" if report.get("exploratory") else ""),
+    fontsize=14,
+)
+display(fig)
+plt.close(fig)
+text/plain
+<Figure size 1500x500 with 2 Axes>
+
+CELL 9 code
+import json
+from pathlib import Path
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
+from IPython.display import display
+
+root = Path(globals().get(
+    "OUTPUT_ROOT", "/content/drive/MyDrive/spno/phase6-evaluation"
+))
+entry = json.loads((root / "phase6-arms/G9.json").read_text())
+report = json.loads((Path(entry["output"]) / "metrics.json").read_text())
+g9 = report["experiments"]["G9"]
+
+assert "reference" in g9, "G9 is missing the reference solver results"
+names = ["reference"] + [name for name in g9 if name != "reference"]
+palette = {
+    "reference": "black",
+    "A": "tab:blue", "A-wide": "tab:orange", "B-loop": "tab:green",
+    "C1": "tab:red", "C2": "tab:purple", "C3": "tab:brown",
+}
+
+# Compare spectra at exactly the same saved endpoint.
+end_step = max(g9["reference"]["steps"])
+reference_k = np.asarray(g9["reference"]["wave_numbers"])
+final_spectra = []
+
+for name in names:
+    series = g9[name]
+    steps = list(series["steps"])
+    if end_step not in steps:
+        raise ValueError(
+            f"{name}: no spectrum at reference endpoint {end_step:g}; "
+            f"last saved step is {max(steps):g}. "
+            "The rollout may have stopped early."
+        )
+
+    k = np.asarray(series["wave_numbers"])
+    assert k.shape == reference_k.shape and np.allclose(k, reference_k), (
+        f"{name}: incompatible frequency grid"
+    )
+    spectrum = np.asarray(series["spectra"][steps.index(end_step)])
+    assert np.isfinite(spectrum).all() and (spectrum >= 0).all(), (
+        f"{name}: invalid final spectrum"
+    )
+    final_spectra.append(spectrum)
+
+fig, axes = plt.subplots(
+    1, 2, figsize=(16, 5.5), constrained_layout=True
+)
+
+# Cascade: match the reference, rather than simply minimize the fraction.
+cutoff = g9["reference"]["cutoff"]
+for name in names:
+    series = g9[name]
+    steps = np.asarray(series["steps"])
+    fraction = np.asarray(series["fraction_above_cutoff"])
+    keep = steps > 0
+
+    axes[0].plot(
+        steps[keep],
+        np.maximum(fraction[keep], 1e-30),
+        marker="o",
+        linestyle="--" if name == "reference" else "-",
+        linewidth=2.5 if name == "reference" else 1.7,
+        color=palette.get(name, "gray"), label=name,
+    )
+
+axes[0].set(
+    title="G9 — Energy transferred to higher frequencies",
+    xlabel="Rollout step (initial step omitted)",
+    ylabel=f"Energy fraction above |k|={cutoff:g}",
+    yscale="log",
+)
+axes[0].grid(True, which="both", alpha=0.18)
+axes[0].legend(fontsize=9)
+
+# Final spectrum heatmap, including the reference row.
+matrix = np.maximum(np.asarray(final_spectra), 1e-30)
+mesh = axes[1].imshow(
+    matrix,
+    aspect="auto",
+    interpolation="nearest",
+    cmap="viridis",
+    norm=LogNorm(),
+)
+axes[1].set_yticks(np.arange(len(names)), names)
+axes[1].set(
+    title=f"G9 — Final spectra at step {end_step:g}",
+    xlabel="Mode index, ordered by |k|",
+)
+fig.colorbar(mesh, ax=axes[1], label="Spectral energy E(k)")
+
+fig.suptitle(
+    "G9 — Compare each model with the reference solver"
+    + (" · Exploratory" if report.get("exploratory") else ""),
+    fontsize=14,
+)
+display(fig)
+plt.close(fig)
+text/plain
+<Figure size 1600x550 with 3 Axes>

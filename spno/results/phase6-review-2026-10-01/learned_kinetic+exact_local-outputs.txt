@@ -1,0 +1,55 @@
+CELL 0 OUTPUT 0
+Loaded project: /content/pin/spno/src/spno/__init__.py
+
+CELL 2 OUTPUT 0
+Mounted at /content/drive
+Loaded: /content/c1-diagnostics/C1-seed0.pt
+C1 seed 0; converged=True
+
+CELL 3 OUTPUT 0
+Generated: (8, 64)
+dt: 0.01 | cutoff: 8
+
+CELL 4 OUTPUT 0
+Running: reference
+Running: C1
+Running: exact kinetic + learned local
+Running: learned kinetic + exact local
+Running: both exact
+reference                            1.131276e-05   1.00 × reference
+C1                                   1.571862e-04   13.89 × reference
+exact kinetic + learned local        9.169612e-06   0.81 × reference
+learned kinetic + exact local        1.995413e-04   17.64 × reference
+both exact                           1.139475e-05   1.01 × reference
+Checks passed. Saved: /content/drive/MyDrive/spno/phase6-evaluation/c1-component-checks/seed0-20260923T113504643981Z.json
+
+CELL 6 OUTPUT 0
+
+===== C1 seed 1 =====
+Running: reference
+Running: C1
+Running: exact kinetic + learned local
+Running: learned kinetic + exact local
+Running: both exact
+reference                            1.131276e-05   1.00 × reference
+C1                                   1.368321e-04   12.10 × reference
+exact kinetic + learned local        8.804512e-06   0.78 × reference
+learned kinetic + exact local        1.815240e-04   16.05 × reference
+both exact                           1.139475e-05   1.01 × reference
+Saved: /content/drive/MyDrive/spno/phase6-evaluation/c1-component-checks/seed1-20260923T121132060179Z.json
+
+===== C1 seed 2 =====
+Running: reference
+Running: C1
+Running: exact kinetic + learned local
+Running: learned kinetic + exact local
+Running: both exact
+reference                            1.131276e-05   1.00 × reference
+C1                                   1.955949e-04   17.29 × reference
+exact kinetic + learned local        9.679179e-06   0.86 × reference
+learned kinetic + exact local        2.365041e-04   20.91 × reference
+both exact                           1.139475e-05   1.01 × reference
+Saved: /content/drive/MyDrive/spno/phase6-evaluation/c1-component-checks/seed2-20260923T121137903885Z.json
+
+CELL 7 OUTPUT 1
+Saved plot: /content/drive/MyDrive/spno/phase6-evaluation/c1-component-checks/seed2-20260923T121137903885Z-seeds1-2.png

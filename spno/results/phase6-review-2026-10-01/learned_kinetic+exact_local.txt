@@ -1,0 +1,466 @@
+
+CELL 0 code
+from pathlib import Path
+import sys, subprocess, importlib
+
+REPO = Path("/content/pin")
+PROJECT_ROOT = REPO / "spno"
+
+if not REPO.exists():
+    subprocess.check_call([
+        "git", "clone", "--depth", "1",
+        "https://github.com/omer2822/pin.git", str(REPO),
+    ])
+
+assert (PROJECT_ROOT / "src/spno").is_dir(), (
+    f"Project not found at {PROJECT_ROOT}; set PROJECT_ROOT to your spno folder."
+)
+
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+importlib.invalidate_caches()
+
+import spno
+print("Loaded project:", spno.__file__)
+OUTPUT
+Loaded project: /content/pin/spno/src/spno/__init__.py
+
+
+CELL 1 code
+from pathlib import Path
+import json
+import torch
+import matplotlib.pyplot as plt
+
+from spno.checkpoints import load_checkpoint_payload, restore_checkpoint
+from spno.config import config_hash
+from spno.precision import widen_to_double
+from spno.data.generate import sample_initial_conditions
+from spno.evaluation.spectral import cascade_series
+from spno.models.split_learned import LearnedSplitStep, ExactSplitStep
+from spno.solvers.split_step import SplitStepNLSOperator, SubsteppedReference
+from spno.artifacts import atomic_json
+
+
+class ComponentSwap(LearnedSplitStep):
+    def __init__(self, learned, exact_kinetic=False, exact_local=False):
+        super().__init__(
+            learned.domain, kinetic_mode=None,
+            trained_dt=learned.trained_dt,
+        )
+        self.learned = learned
+        self.exact = ExactSplitStep(learned.domain)
+        self.exact_kinetic = exact_kinetic
+        self.exact_local = exact_local
+
+    def _kinetic_half(self, field, parameters, dt):
+        operator = self.exact if self.exact_kinetic else self.learned
+        return operator._kinetic_half(field, parameters, dt)
+
+    def local_phase(self, field, potential, alpha, beta):
+        operator = self.exact if self.exact_local else self.learned
+        return operator.local_phase(field, potential, alpha, beta)
+
+
+@torch.inference_mode()
+def measure_components(model, config, inputs, steps=200, stride=25):
+    assert steps > 0 and stride > 0 and steps % stride == 0
+
+    model = widen_to_double(model, device="cpu").eval()
+    both_exact = ComponentSwap(model, True, True)
+
+    # Check that the wrapper preserves the intended compositions.
+    torch.testing.assert_close(
+        ComponentSwap(model)(*inputs), model(*inputs),
+        atol=1e-12, rtol=1e-12,
+    )
+    torch.testing.assert_close(
+        both_exact(*inputs),
+        SplitStepNLSOperator(config.domain)(*inputs),
+        atol=1e-12, rtol=1e-12,
+    )
+
+    variants = {
+        "reference": SubsteppedReference(config.domain, config.substeps),
+        "C1": model,
+        "exact kinetic + learned local": ComponentSwap(model, True, False),
+        "learned kinetic + exact local": ComponentSwap(model, False, True),
+        "both exact": both_exact,
+    }
+
+    results = {}
+    for name, operator in variants.items():
+        print(f"Running: {name}", flush=True)
+        result = cascade_series(
+            operator.eval(), config.domain, *inputs,
+            steps=steps, stride=stride,
+            cutoff=float(config.initial_bandwidth),
+        )
+        assert result["steps"][-1] == steps, f"{name} stopped early"
+        results[name] = result
+
+    return results
+
+CELL 2 code
+import hashlib
+import zipfile
+from google.colab import drive
+
+from spno.config import DataConfig, config_hash
+from spno.models.split_learned import DensityPhaseSplitStep
+from spno.checkpoints import load_checkpoint_payload, restore_checkpoint
+
+MODEL_SEED = 0
+config = DataConfig()
+
+if not Path("/content/drive/MyDrive").exists():
+    drive.mount("/content/drive")
+
+OUTPUT_ROOT = Path("/content/drive/MyDrive/spno/phase6-evaluation")
+filename = f"C1-seed{MODEL_SEED}.pt"
+relative_checkpoint = (
+    Path("checkpoints/phase6")
+    / f"{config_hash(config)}-K0"
+    / filename
+)
+
+# Standard location used by your Phase 6 notebook.
+checkpoint_path = (
+    PROJECT_ROOT / "results/phase6-standalone-artifacts"
+    / relative_checkpoint
+)
+
+if not checkpoint_path.is_file():
+    # Only this checkpoint is needed; no training/test shards are required.
+    archive_names = [
+        "phase6-eval-only-bd4e108527-K0.zip",
+        "phase6-standalone-artifacts-bd4e108527-K0.zip",
+    ]
+    archive_path = next(
+        (
+            path
+            for name in archive_names
+            for path in Path("/content/drive/MyDrive").rglob(name)
+        ),
+        None,
+    )
+    if archive_path is None:
+        raise FileNotFoundError(
+            f"Could not find {checkpoint_path} or either Phase 6 archive "
+            "in MyDrive. Set checkpoint_path to your saved C1 checkpoint."
+        )
+
+    with zipfile.ZipFile(archive_path) as archive:
+        members = [
+            name for name in archive.namelist()
+            if name.endswith("/" + relative_checkpoint.as_posix())
+        ]
+        assert len(members) == 1, (
+            f"Expected one matching checkpoint in {archive_path}; found {members}"
+        )
+        checkpoint_path = Path("/content/c1-diagnostics") / filename
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint_path.write_bytes(archive.read(members[0]))
+
+payload = load_checkpoint_payload(checkpoint_path)
+metadata = payload.metadata
+
+assert metadata.model_name == "C1", metadata.model_name
+assert metadata.seed == MODEL_SEED, metadata.seed
+
+architecture = metadata.architecture
+c1 = DensityPhaseSplitStep(
+    config.domain,
+    kinetic_mode=architecture.get("kinetic_mode", "K0"),
+    local_mode=architecture.get("local_mode") or "L0",
+    width=int(architecture.get("width", 32)),
+    trained_dt=metadata.trained_dt,
+)
+c1 = restore_checkpoint(
+    c1, payload,
+    expected_data_hash=config_hash(config),
+    allow_budget_bound=True,
+).eval()
+
+# Used by the existing save-results cell.
+checkpoint_row = {
+    "path": str(checkpoint_path),
+    "sha256": hashlib.sha256(checkpoint_path.read_bytes()).hexdigest(),
+}
+
+print("Loaded:", checkpoint_path)
+print(f"C1 seed {MODEL_SEED}; converged={metadata.converged}")
+OUTPUT
+Mounted at /content/drive
+Loaded: /content/c1-diagnostics/C1-seed0.pt
+C1 seed 0; converged=True
+
+
+CELL 3 code
+PROBE_SEED = 0
+BATCH = 8
+ALPHA = 0.9
+BETA = 0.3
+
+initial = sample_initial_conditions(
+    config.domain, BATCH, config.initial_bandwidth, config.mass_range,
+    torch.Generator().manual_seed(PROBE_SEED),
+)
+potential = torch.zeros_like(initial.real)
+alpha = torch.full((BATCH,), ALPHA, dtype=torch.float64)
+beta = torch.full((BATCH,), BETA, dtype=torch.float64)
+
+probe_inputs = (initial, potential, alpha, beta, config.dt)
+
+print("Generated:", tuple(initial.shape))
+print("dt:", config.dt, "| cutoff:", config.initial_bandwidth)
+OUTPUT
+Generated: (8, 64)
+dt: 0.01 | cutoff: 8
+
+
+CELL 4 code
+from dataclasses import asdict
+from datetime import datetime, timezone
+
+results = measure_components(c1, config, probe_inputs, steps=200, stride=25)
+
+report = {
+    "model_seed": MODEL_SEED,
+    "checkpoint_sha256": checkpoint_row["sha256"],
+    "checkpoint_metadata": asdict(payload.metadata),
+    "config": asdict(config),
+    "probe": {
+        "seed": PROBE_SEED, "batch": BATCH,
+        "alpha": ALPHA, "beta": BETA, "potential": "zero",
+    },
+    "results": results,
+}
+
+stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+report_path = (
+    Path(OUTPUT_ROOT) / "c1-component-checks"
+    / f"seed{MODEL_SEED}-{stamp}.json"
+)
+atomic_json(report_path, report)
+
+reference_end = results["reference"]["fraction_above_cutoff"][-1]
+for name, result in results.items():
+    value = result["fraction_above_cutoff"][-1]
+    ratio = value / reference_end if reference_end > 0 else float("nan")
+    print(f"{name:36s} {value:.6e}   {ratio:.2f} × reference")
+
+print("Checks passed. Saved:", report_path)
+OUTPUT
+Running: reference
+Running: C1
+Running: exact kinetic + learned local
+Running: learned kinetic + exact local
+Running: both exact
+reference                            1.131276e-05   1.00 × reference
+C1                                   1.571862e-04   13.89 × reference
+exact kinetic + learned local        9.169612e-06   0.81 × reference
+learned kinetic + exact local        1.995413e-04   17.64 × reference
+both exact                           1.139475e-05   1.01 × reference
+Checks passed. Saved: /content/drive/MyDrive/spno/phase6-evaluation/c1-component-checks/seed0-20260923T113504643981Z.json
+
+
+CELL 5 code
+# After a runtime restart, paste the saved path here:
+# report_path = Path("/content/drive/MyDrive/.../seed0-....json")
+
+saved = json.loads(Path(report_path).read_text())
+
+fig, ax = plt.subplots(figsize=(10, 5))
+for name, result in saved["results"].items():
+    ax.semilogy(
+        result["steps"][1:],
+        result["fraction_above_cutoff"][1:],
+        marker="o",
+        linestyle="--" if name == "reference" else "-",
+        label=name,
+    )
+
+ax.set_xlabel("Rollout step")
+ax.set_ylabel(
+    f"Fraction of Fourier power above |k| = "
+    f"{saved['config']['initial_bandwidth']}"
+)
+ax.set_title(f"C1 component checks — training seed {saved['model_seed']}")
+ax.grid(True, which="both", alpha=0.25)
+ax.legend()
+fig.tight_layout()
+fig.savefig(Path(report_path).with_suffix(".png"), dpi=160)
+plt.show()
+text/plain
+<Figure size 1000x500 with 1 Axes>
+
+CELL 6 code
+from dataclasses import asdict
+from datetime import datetime, timezone
+import hashlib
+import zipfile
+
+
+def load_c1_seed(seed):
+    filename = f"C1-seed{seed}.pt"
+    relative = (
+        Path("checkpoints/phase6")
+        / f"{config_hash(config)}-K0"
+        / filename
+    )
+    path = PROJECT_ROOT / "results/phase6-standalone-artifacts" / relative
+    cached = Path("/content/c1-diagnostics") / filename
+
+    if not path.is_file():
+        path = cached
+
+    if not path.is_file():
+        archive_names = [
+            "phase6-eval-only-bd4e108527-K0.zip",
+            "phase6-standalone-artifacts-bd4e108527-K0.zip",
+        ]
+        archive_path = next(
+            (
+                p
+                for name in archive_names
+                for p in Path("/content/drive/MyDrive").rglob(name)
+            ),
+            None,
+        )
+        if archive_path is None:
+            raise FileNotFoundError(f"No checkpoint or archive found for seed {seed}")
+
+        with zipfile.ZipFile(archive_path) as archive:
+            members = [
+                name for name in archive.namelist()
+                if name.endswith("/" + relative.as_posix())
+            ]
+            assert len(members) == 1, f"Checkpoint match is ambiguous: {members}"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(archive.read(members[0]))
+
+    saved = load_checkpoint_payload(path)
+    meta = saved.metadata
+    assert meta.model_name == "C1" and meta.seed == seed
+
+    arch = meta.architecture
+    model = DensityPhaseSplitStep(
+        config.domain,
+        kinetic_mode=arch.get("kinetic_mode", "K0"),
+        local_mode=arch.get("local_mode") or "L0",
+        width=int(arch.get("width", 32)),
+        trained_dt=meta.trained_dt,
+    )
+    model = restore_checkpoint(
+        model, saved,
+        expected_data_hash=config_hash(config),
+        allow_budget_bound=True,
+    ).eval()
+
+    return model, saved, path
+
+
+seed_report_paths = {}
+
+for seed in [1, 2]:
+    print(f"\n===== C1 seed {seed} =====", flush=True)
+    seed_model, seed_payload, seed_path = load_c1_seed(seed)
+
+    seed_results = measure_components(
+        seed_model, config, probe_inputs, steps=200, stride=25,
+    )
+    seed_report = {
+        "model_seed": seed,
+        "checkpoint_sha256": hashlib.sha256(seed_path.read_bytes()).hexdigest(),
+        "checkpoint_metadata": asdict(seed_payload.metadata),
+        "config": asdict(config),
+        "probe": {
+            "seed": PROBE_SEED, "batch": BATCH,
+            "alpha": ALPHA, "beta": BETA, "potential": "zero",
+        },
+        "results": seed_results,
+    }
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    output_path = (
+        Path(OUTPUT_ROOT) / "c1-component-checks"
+        / f"seed{seed}-{stamp}.json"
+    )
+    atomic_json(output_path, seed_report)
+    seed_report_paths[seed] = output_path
+
+    reference_end = seed_results["reference"]["fraction_above_cutoff"][-1]
+    for name, result in seed_results.items():
+        value = result["fraction_above_cutoff"][-1]
+        ratio = value / reference_end if reference_end > 0 else float("nan")
+        print(f"{name:36s} {value:.6e}   {ratio:.2f} × reference")
+
+    print("Saved:", output_path, flush=True)
+OUTPUT
+
+===== C1 seed 1 =====
+Running: reference
+Running: C1
+Running: exact kinetic + learned local
+Running: learned kinetic + exact local
+Running: both exact
+reference                            1.131276e-05   1.00 × reference
+C1                                   1.368321e-04   12.10 × reference
+exact kinetic + learned local        8.804512e-06   0.78 × reference
+learned kinetic + exact local        1.815240e-04   16.05 × reference
+both exact                           1.139475e-05   1.01 × reference
+Saved: /content/drive/MyDrive/spno/phase6-evaluation/c1-component-checks/seed1-20260923T121132060179Z.json
+
+===== C1 seed 2 =====
+Running: reference
+Running: C1
+Running: exact kinetic + learned local
+Running: learned kinetic + exact local
+Running: both exact
+reference                            1.131276e-05   1.00 × reference
+C1                                   1.955949e-04   17.29 × reference
+exact kinetic + learned local        9.679179e-06   0.86 × reference
+learned kinetic + exact local        2.365041e-04   20.91 × reference
+both exact                           1.139475e-05   1.01 × reference
+Saved: /content/drive/MyDrive/spno/phase6-evaluation/c1-component-checks/seed2-20260923T121137903885Z.json
+
+
+CELL 7 code
+fig, axes = plt.subplots(1, 2, figsize=(16, 5), sharey=True)
+
+for ax, (seed, path) in zip(axes, seed_report_paths.items()):
+    saved = json.loads(Path(path).read_text())
+
+    for name, result in saved["results"].items():
+        ax.semilogy(
+            result["steps"][1:],
+            result["fraction_above_cutoff"][1:],
+            marker="o",
+            linestyle="--" if name == "reference" else "-",
+            label=name,
+        )
+
+    ax.set_title(f"C1 — training seed {seed}")
+    ax.set_xlabel("Rollout step")
+    ax.grid(True, which="both", alpha=0.25)
+
+axes[0].set_ylabel("Fraction of Fourier power above cutoff")
+axes[1].legend(fontsize=8)
+fig.tight_layout()
+
+plot_path = Path(seed_report_paths[2]).with_name(
+    Path(seed_report_paths[2]).stem + "-seeds1-2.png"
+)
+fig.savefig(plot_path, dpi=160)
+plt.show()
+print("Saved plot:", plot_path)
+text/plain
+<Figure size 1600x500 with 2 Axes>
+OUTPUT
+Saved plot: /content/drive/MyDrive/spno/phase6-evaluation/c1-component-checks/seed2-20260923T121137903885Z-seeds1-2.png
+
+
+CELL 8 markdown
+Inspect learned dispersion specifically around k=8–16. The saved diagnostics showed saturation there; this plot establishes that the kinetic component matters, but does not alone isolate which frequencies cause the excess.
+
+CELL 9 code

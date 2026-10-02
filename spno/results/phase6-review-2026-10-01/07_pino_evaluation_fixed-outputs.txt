@@ -1,0 +1,8 @@
+CELL 2 OUTPUT 0
+Drive already mounted at /content/drive; to attempt to forcibly remount, call drive.mount("/content/drive", force_remount=True).
+Verifying archive: /content/drive/MyDrive/תיקייה ללא שם/phase6-standalone-artifacts-bd4e108527-K0.zip
+Extracting full Phase 6 artifacts...
+Code: /content/spno-colab
+SOURCE_ROOT: /content/phase6-full-bd4e108527-K0/spno/results/phase6-standalone-artifacts
+OUTPUT_ROOT: /content/drive/MyDrive/spno/workflow
+Loaded artifact directory: 36 checkpoints; train/val/test present.

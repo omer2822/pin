@@ -1,0 +1,234 @@
+CELL 2 OUTPUT 0
+{
+  "settings": {
+    "training_seeds": [
+      0,
+      1,
+      2
+    ],
+    "probe_seeds": [
+      1000,
+      1001,
+      1002,
+      1003,
+      1004
+    ],
+    "batch": 16,
+    "bandwidths": [
+      4,
+      8,
+      12,
+      16,
+      24
+    ],
+    "short_steps": 200,
+    "long_steps": 2000,
+    "stride": 50,
+    "reference_substeps": 32,
+    "reference_tolerance": 0.0001,
+    "spatial_samples": 2,
+    "spatial_tolerance": 0.001,
+    "tail_threshold": 1e-06,
+    "device": "cpu",
+    "threads": 2,
+    "allow_budget_bound": true,
+    "bootstrap_draws": 2000,
+    "gauge": true,
+    "case_names": [
+      "G1-interpolation",
+      "G2-extrapolation",
+      "G2-alpha-only",
+      "G2-beta-only",
+      "G3-potential-strong",
+      "G3-potential-short",
+      "G4-bandwidth-4",
+      "G4-bandwidth-8",
+      "G4-bandwidth-12",
+      "G4-bandwidth-16",
+      "G4-bandwidth-24"
+    ]
+  },
+  "probe": {
+    "probe_seed": 1000,
+    "batch": 16,
+    "steps": 200,
+    "reference_substeps": 64,
+    "local_law_batch": 256
+  }
+}
+
+CELL 4 OUTPUT 0
+Mounted at /content/drive
+Embedded source: 3ed244c50ca1f6d371a8a531bb6e1377a3a193594af0d6ffbe6073614fb167c9
+Checkpoint root: /content/spno-hybrid-artifacts-cc882810f6fe/spno/results/phase6-standalone-artifacts
+Results: /content/drive/MyDrive/spno/gauge-study
+
+CELL 6 OUTPUT 0
+(a) saved run 3bf81deae4ef1ff9
+
+CELL 6 OUTPUT 1
+<IPython.core.display.HTML object>
+CELL 6 OUTPUT 2
+<IPython.core.display.HTML object>
+CELL 6 OUTPUT 3
+<IPython.core.display.Image object>
+CELL 8 OUTPUT 0
+seed 0 G1-interpolation   C1                   raw=6.307e-02 aligned=5.237e-02
+seed 0 G1-interpolation   raw hybrid           raw=1.548e+00 aligned=4.225e-03
+seed 0 G1-interpolation   gauge-fixed hybrid   raw=6.132e-02 aligned=4.225e-03
+seed 0 G1-interpolation   raw reverse          raw=1.540e+00 aligned=5.248e-02
+seed 0 G1-interpolation   gauge-fixed reverse  raw=6.951e-02 aligned=5.248e-02
+seed 0 G4-bandwidth-8     C1                   raw=6.307e-02 aligned=5.237e-02
+seed 0 G4-bandwidth-8     raw hybrid           raw=1.548e+00 aligned=4.225e-03
+seed 0 G4-bandwidth-8     gauge-fixed hybrid   raw=6.132e-02 aligned=4.225e-03
+seed 0 G4-bandwidth-8     raw reverse          raw=1.540e+00 aligned=5.248e-02
+seed 0 G4-bandwidth-8     gauge-fixed reverse  raw=6.951e-02 aligned=5.248e-02
+seed 0 G4-bandwidth-12    C1                   raw=6.993e-01 aligned=6.911e-01
+seed 0 G4-bandwidth-12    raw hybrid           raw=1.548e+00 aligned=4.214e-03
+seed 0 G4-bandwidth-12    gauge-fixed hybrid   raw=6.147e-02 aligned=4.214e-03
+seed 0 G4-bandwidth-12    raw reverse          raw=1.507e+00 aligned=6.909e-01
+seed 0 G4-bandwidth-12    gauge-fixed reverse  raw=6.997e-01 aligned=6.909e-01
+seed 0 G4-bandwidth-16    C1                   raw=9.011e-01 aligned=8.838e-01
+seed 0 G4-bandwidth-16    raw hybrid           raw=1.548e+00 aligned=5.446e-03
+seed 0 G4-bandwidth-16    gauge-fixed hybrid   raw=6.207e-02 aligned=5.446e-03
+seed 0 G4-bandwidth-16    raw reverse          raw=1.463e+00 aligned=8.839e-01
+seed 0 G4-bandwidth-16    gauge-fixed reverse  raw=8.989e-01 aligned=8.839e-01
+seed 0 drift [hybrid_rho   ] corr=+1.000 slope=1.000 residual=0.002
+seed 0 drift [reference_rho] corr=+1.000 slope=1.000 residual=0.002
+seed 0 delta-q slope/beta: β=-0.4: -0.139, β=-0.2: -0.096, β=+0.3: -0.112, β=+0.6: -0.116
+seed 1 G1-interpolation   C1                   raw=4.957e-02 aligned=4.259e-02
+seed 1 G1-interpolation   raw hybrid           raw=1.265e+00 aligned=4.314e-03
+seed 1 G1-interpolation   gauge-fixed hybrid   raw=5.069e-02 aligned=4.314e-03
+seed 1 G1-interpolation   raw reverse          raw=1.271e+00 aligned=4.299e-02
+seed 1 G1-interpolation   gauge-fixed reverse  raw=6.220e-02 aligned=4.299e-02
+seed 1 G4-bandwidth-8     C1                   raw=4.957e-02 aligned=4.259e-02
+seed 1 G4-bandwidth-8     raw hybrid           raw=1.265e+00 aligned=4.314e-03
+seed 1 G4-bandwidth-8     gauge-fixed hybrid   raw=5.069e-02 aligned=4.314e-03
+seed 1 G4-bandwidth-8     raw reverse          raw=1.271e+00 aligned=4.299e-02
+seed 1 G4-bandwidth-8     gauge-fixed reverse  raw=6.220e-02 aligned=4.299e-02
+seed 1 G4-bandwidth-12    C1                   raw=6.694e-01 aligned=6.612e-01
+seed 1 G4-bandwidth-12    raw hybrid           raw=1.264e+00 aligned=4.278e-03
+seed 1 G4-bandwidth-12    gauge-fixed hybrid   raw=5.089e-02 aligned=4.278e-03
+seed 1 G4-bandwidth-12    raw reverse          raw=1.340e+00 aligned=6.611e-01
+seed 1 G4-bandwidth-12    gauge-fixed reverse  raw=6.717e-01 aligned=6.611e-01
+seed 1 G4-bandwidth-16    C1                   raw=8.922e-01 aligned=8.752e-01
+seed 1 G4-bandwidth-16    raw hybrid           raw=1.264e+00 aligned=5.564e-03
+seed 1 G4-bandwidth-16    gauge-fixed hybrid   raw=5.149e-02 aligned=5.564e-03
+seed 1 G4-bandwidth-16    raw reverse          raw=1.356e+00 aligned=8.753e-01
+seed 1 G4-bandwidth-16    gauge-fixed reverse  raw=8.917e-01 aligned=8.753e-01
+seed 1 drift [hybrid_rho   ] corr=+1.000 slope=1.001 residual=0.003
+seed 1 drift [reference_rho] corr=+1.000 slope=1.001 residual=0.002
+seed 1 delta-q slope/beta: β=-0.4: -0.166, β=-0.2: -0.148, β=+0.3: -0.130, β=+0.6: -0.130
+seed 2 G1-interpolation   C1                   raw=4.155e-02 aligned=3.739e-02
+seed 2 G1-interpolation   raw hybrid           raw=9.475e-01 aligned=3.711e-03
+seed 2 G1-interpolation   gauge-fixed hybrid   raw=4.896e-02 aligned=3.711e-03
+seed 2 G1-interpolation   raw reverse          raw=9.512e-01 aligned=3.721e-02
+seed 2 G1-interpolation   gauge-fixed reverse  raw=5.675e-02 aligned=3.721e-02
+seed 2 G4-bandwidth-8     C1                   raw=4.155e-02 aligned=3.739e-02
+seed 2 G4-bandwidth-8     raw hybrid           raw=9.475e-01 aligned=3.711e-03
+seed 2 G4-bandwidth-8     gauge-fixed hybrid   raw=4.896e-02 aligned=3.711e-03
+seed 2 G4-bandwidth-8     raw reverse          raw=9.512e-01 aligned=3.721e-02
+seed 2 G4-bandwidth-8     gauge-fixed reverse  raw=5.675e-02 aligned=3.721e-02
+seed 2 G4-bandwidth-12    C1                   raw=6.759e-01 aligned=6.640e-01
+seed 2 G4-bandwidth-12    raw hybrid           raw=9.481e-01 aligned=3.980e-03
+seed 2 G4-bandwidth-12    gauge-fixed hybrid   raw=4.859e-02 aligned=3.980e-03
+seed 2 G4-bandwidth-12    raw reverse          raw=1.139e+00 aligned=6.639e-01
+seed 2 G4-bandwidth-12    gauge-fixed reverse  raw=6.737e-01 aligned=6.639e-01
+seed 2 G4-bandwidth-16    C1                   raw=8.758e-01 aligned=8.582e-01
+seed 2 G4-bandwidth-16    raw hybrid           raw=9.484e-01 aligned=5.443e-03
+seed 2 G4-bandwidth-16    gauge-fixed hybrid   raw=4.902e-02 aligned=5.443e-03
+seed 2 G4-bandwidth-16    raw reverse          raw=1.208e+00 aligned=8.582e-01
+seed 2 G4-bandwidth-16    gauge-fixed reverse  raw=8.751e-01 aligned=8.582e-01
+seed 2 drift [hybrid_rho   ] corr=+1.000 slope=1.000 residual=0.003
+seed 2 drift [reference_rho] corr=+1.000 slope=1.000 residual=0.003
+seed 2 delta-q slope/beta: β=-0.4: -0.158, β=-0.2: -0.095, β=+0.3: -0.095, β=+0.6: -0.113
+PASS  seed 0: bw8 gauged hybrid aligned ≈ 4e-3 (×2)
+PASS  seed 0: bw8 gauged hybrid raw ≈ 6e-2 (×2)
+PASS  seed 0: drift slope 1.000±0.01, corr>0.999 [hybrid_rho]
+PASS  seed 0: drift slope 1.000±0.01, corr>0.999 [reference_rho]
+PASS  seed 0: δq slope/β in [−0.17, −0.07]
+PASS  seed 1: bw8 gauged hybrid aligned ≈ 4e-3 (×2)
+PASS  seed 1: bw8 gauged hybrid raw ≈ 6e-2 (×2)
+PASS  seed 1: drift slope 1.000±0.01, corr>0.999 [hybrid_rho]
+PASS  seed 1: drift slope 1.000±0.01, corr>0.999 [reference_rho]
+PASS  seed 1: δq slope/β in [−0.17, −0.07]
+PASS  seed 2: bw8 gauged hybrid aligned ≈ 4e-3 (×2)
+PASS  seed 2: bw8 gauged hybrid raw ≈ 6e-2 (×2)
+PASS  seed 2: drift slope 1.000±0.01, corr>0.999 [hybrid_rho]
+PASS  seed 2: drift slope 1.000±0.01, corr>0.999 [reference_rho]
+PASS  seed 2: δq slope/β in [−0.17, −0.07]
+
+CELL 10 OUTPUT 0
+Run 7f89abdf3cac3631: 11 cases × 5 probe batches; 3 training seeds; exploratory=True
+G1-interpolation / probe 1000: 40.2s; reference Δt error=2.24e-07, 2N error=1.6270841788711847e-07
+G1-interpolation / probe 1001: 47.7s; reference Δt error=7.99e-08, 2N error=1.4286301997104073e-07
+G1-interpolation / probe 1002: 37.7s; reference Δt error=8.85e-08, 2N error=5.627065453735437e-10
+G1-interpolation / probe 1003: 41.2s; reference Δt error=1.05e-07, 2N error=5.139789798544215e-09
+G1-interpolation / probe 1004: 40.7s; reference Δt error=9.17e-08, 2N error=8.896357190825229e-09
+G2-extrapolation / probe 1000: 37.0s; reference Δt error=4.36e-07, 2N error=3.9404632695692343e-07
+G2-extrapolation / probe 1001: 39.9s; reference Δt error=9.35e-08, 2N error=2.6464070999558865e-07
+G2-extrapolation / probe 1002: 36.9s; reference Δt error=1.60e-07, 2N error=9.771476516111695e-10
+G2-extrapolation / probe 1003: 40.2s; reference Δt error=1.61e-07, 2N error=8.563143272379865e-09
+G2-extrapolation / probe 1004: 40.6s; reference Δt error=1.69e-07, 2N error=1.4235446134271136e-08
+G2-alpha-only / probe 1000: 36.1s; reference Δt error=2.71e-07, 2N error=2.0550418471901174e-07
+G2-alpha-only / probe 1001: 40.2s; reference Δt error=6.04e-08, 2N error=1.7117566849052682e-07
+G2-alpha-only / probe 1002: 36.3s; reference Δt error=1.10e-07, 2N error=4.165683492661769e-10
+G2-alpha-only / probe 1003: 40.1s; reference Δt error=1.21e-07, 2N error=4.667785271703122e-09
+G2-alpha-only / probe 1004: 36.5s; reference Δt error=1.13e-07, 2N error=7.120937288514107e-09
+G2-beta-only / probe 1000: 40.5s; reference Δt error=3.56e-07, 2N error=3.1177954996207014e-07
+G2-beta-only / probe 1001: 40.1s; reference Δt error=1.20e-07, 2N error=2.2117856035029436e-07
+G2-beta-only / probe 1002: 37.5s; reference Δt error=1.28e-07, 2N error=1.320012760166422e-09
+G2-beta-only / probe 1003: 39.9s; reference Δt error=1.39e-07, 2N error=9.427758983239482e-09
+G2-beta-only / probe 1004: 36.8s; reference Δt error=1.47e-07, 2N error=1.780191207403205e-08
+G3-potential-short / probe 1000: 40.4s; reference Δt error=2.27e-07, 2N error=1.6257197828825331e-07
+G3-potential-short / probe 1001: 38.3s; reference Δt error=8.56e-08, 2N error=1.429731786009913e-07
+G3-potential-short / probe 1002: 38.7s; reference Δt error=8.88e-08, 2N error=5.646497755534808e-10
+G3-potential-short / probe 1003: 40.3s; reference Δt error=1.05e-07, 2N error=5.107714400234837e-09
+G3-potential-short / probe 1004: 36.8s; reference Δt error=9.29e-08, 2N error=8.955386645706742e-09
+G3-potential-strong / probe 1000: 40.3s; reference Δt error=2.22e-07, 2N error=1.628233099649099e-07
+G3-potential-strong / probe 1001: 38.2s; reference Δt error=7.95e-08, 2N error=1.4295921635779846e-07
+G3-potential-strong / probe 1002: 38.7s; reference Δt error=8.90e-08, 2N error=5.61953113504123e-10
+G3-potential-strong / probe 1003: 40.1s; reference Δt error=1.05e-07, 2N error=5.131164220938461e-09
+G3-potential-strong / probe 1004: 36.6s; reference Δt error=9.31e-08, 2N error=8.65720914362823e-09
+G4-bandwidth-4 / probe 1000: 39.6s; reference Δt error=3.76e-08, 2N error=2.8217492088594752e-12
+G4-bandwidth-4 / probe 1001: 36.1s; reference Δt error=1.71e-08, 2N error=3.1369369253896554e-12
+G4-bandwidth-4 / probe 1002: 40.3s; reference Δt error=1.55e-08, 2N error=2.5630837188040846e-12
+G4-bandwidth-4 / probe 1003: 38.9s; reference Δt error=1.82e-08, 2N error=3.035713960957197e-12
+G4-bandwidth-4 / probe 1004: 37.9s; reference Δt error=2.34e-08, 2N error=3.7409004698999915e-12
+G4-bandwidth-8 / probe 1000: 40.1s; reference Δt error=2.24e-07, 2N error=1.6270841788711847e-07
+G4-bandwidth-8 / probe 1001: 36.3s; reference Δt error=7.99e-08, 2N error=1.4286301997104073e-07
+G4-bandwidth-8 / probe 1002: 39.7s; reference Δt error=8.85e-08, 2N error=5.627065453735437e-10
+G4-bandwidth-8 / probe 1003: 37.8s; reference Δt error=1.05e-07, 2N error=5.139789798544215e-09
+G4-bandwidth-8 / probe 1004: 38.9s; reference Δt error=9.17e-08, 2N error=8.896357190825229e-09
+G4-bandwidth-12 / probe 1000: 40.1s; reference Δt error=3.62e-07, 2N error=1.0343257990293487e-05
+G4-bandwidth-12 / probe 1001: 36.9s; reference Δt error=1.81e-07, 2N error=1.1448794217918833e-05
+G4-bandwidth-12 / probe 1002: 39.9s; reference Δt error=1.62e-07, 2N error=2.208573433709863e-06
+G4-bandwidth-12 / probe 1003: 36.5s; reference Δt error=2.46e-07, 2N error=3.1044477451471632e-06
+G4-bandwidth-12 / probe 1004: 40.3s; reference Δt error=2.00e-07, 2N error=3.372959988441152e-06
+G4-bandwidth-16 / probe 1000: 40.0s; reference Δt error=7.28e-07, 2N error=0.0004839192026431246
+G4-bandwidth-16 / probe 1001: 36.0s; reference Δt error=2.20e-07, 2N error=0.000706030909225181
+G4-bandwidth-16 / probe 1002: 39.7s; reference Δt error=2.24e-07, 2N error=0.00011670618463122427
+G4-bandwidth-16 / probe 1003: 44.5s; reference Δt error=3.23e-07, 2N error=0.00022919129115881807
+G4-bandwidth-16 / probe 1004: 36.0s; reference Δt error=2.46e-07, 2N error=0.0005788364368958845
+G4-bandwidth-24 / probe 1000: 40.7s; reference Δt error=9.28e-07, 2N error=0.007894143798899496
+G4-bandwidth-24 / probe 1001: 37.3s; reference Δt error=3.44e-07, 2N error=0.007738348135125924
+G4-bandwidth-24 / probe 1002: 39.0s; reference Δt error=3.62e-07, 2N error=0.005145492133383101
+G4-bandwidth-24 / probe 1003: 39.7s; reference Δt error=4.87e-07, 2N error=0.006594621702879858
+G4-bandwidth-24 / probe 1004: 36.2s; reference Δt error=3.78e-07, 2N error=0.004891822470566064
+(b) C1 gauged swaps: /content/drive/MyDrive/spno/gauge-study/c1/7f89abdf3cac3631
+
+CELL 10 OUTPUT 1
+<IPython.core.display.HTML object>
+CELL 10 OUTPUT 2
+<IPython.core.display.HTML object>
+CELL 10 OUTPUT 3
+<IPython.core.display.Image object>
+CELL 12 OUTPUT 0
+C1g not available yet: C1g (lambda=0) checkpoints missing for seeds [0, 1, 2]; train them in 00_training
+Train it in 00_training.ipynb: TRAIN_PHASES=[7], C1G_LAMBDAS=[0.0, 0.01].
+C1g+PDE (λ=0.01) not available: C1g (lambda=0.01) checkpoints missing for seeds [0, 1, 2]; train them in 00_training
+
+CELL 12 OUTPUT 1
+<IPython.core.display.HTML object>
+CELL 14 OUTPUT 0
+(d) skipped: train C1g first (see section (c)).

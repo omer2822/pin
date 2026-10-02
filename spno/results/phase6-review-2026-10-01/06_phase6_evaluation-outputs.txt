@@ -1,0 +1,145 @@
+CELL 1 OUTPUT 0
+Mounted at /content/drive
+eacad67 Created using Colab
+
+archive: /content/drive/MyDrive/תיקייה ללא שם/phase6-eval-only-bd4e108527-K0.zip
+source : /content/pin/spno/results/phase6-standalone-artifacts
+output : /content/drive/MyDrive/spno/phase6-evaluation
+
+CELL 3 OUTPUT 0
+verified 57 files (36 checkpoints); absent (train only): 5
+
+CELL 5 OUTPUT 0
+36 checkpoints, seeds [0, 1, 2], data DataConfig quick=False
+converged: 7   budget-bound: 29
+
+CELL 7 OUTPUT 0
+compared 18 checkpoints, 6102 numbers; largest relative difference 2.62e-10
+PASS — checkpoints reproduce the Windows measurements
+
+CELL 9 OUTPUT 0
+G5a  already done -> /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-1c494f0cc6b5b7034734-budget-bound
+G5b  already done -> /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-2d3f80134f0055e64102-budget-bound
+G6b  already done -> /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-3b08e3d103cb5bad9b8a-budget-bound
+G6a  already done -> /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-d21042d202b17f9c46c2-budget-bound
+G7   already done -> /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-dbe381a42e255283674e-budget-bound
+G1   already done -> /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-84570dd391629a55578c-budget-bound
+G2   already done -> /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-c957463f3f95658c63f7-budget-bound
+G3   already done -> /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-9eabfbd841c29d3983a4-budget-bound
+G4   already done -> /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-646878ade0e00899c49a-budget-bound
+G9   already done -> /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-a5cffb29aa925c1666a5-budget-bound
+
+CELL 11 OUTPUT 0
+G1   exploratory=True     620.3s  /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-84570dd391629a55578c-budget-bound
+
+CELL 11 OUTPUT 1
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 2
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 3
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 4
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 5
+G2   exploratory=True     637.3s  /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-c957463f3f95658c63f7-budget-bound
+
+CELL 11 OUTPUT 6
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 7
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 8
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 9
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 10
+G3   exploratory=True    3127.6s  /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-9eabfbd841c29d3983a4-budget-bound
+
+CELL 11 OUTPUT 11
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 12
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 13
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 14
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 15
+G4   exploratory=True    2672.7s  /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-646878ade0e00899c49a-budget-bound
+
+CELL 11 OUTPUT 16
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 17
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 18
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 19
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 20
+G5a  exploratory=True      13.3s  /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-1c494f0cc6b5b7034734-budget-bound
+
+CELL 11 OUTPUT 21
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 22
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 23
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 24
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 25
+G5b  exploratory=True      13.9s  /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-2d3f80134f0055e64102-budget-bound
+
+CELL 11 OUTPUT 26
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 27
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 28
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 29
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 30
+G6a  exploratory=True     836.8s  /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-d21042d202b17f9c46c2-budget-bound
+
+CELL 11 OUTPUT 31
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 32
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 33
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 34
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 35
+G6b  exploratory=True       6.8s  /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-3b08e3d103cb5bad9b8a-budget-bound
+
+CELL 11 OUTPUT 36
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 37
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 38
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 39
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 40
+G7   exploratory=True     213.0s  /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-dbe381a42e255283674e-budget-bound
+
+CELL 11 OUTPUT 41
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 42
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 43
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 44
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 45
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 46
+G9   exploratory=True      43.9s  /content/drive/MyDrive/spno/phase6-evaluation/reports/phase6-a5cffb29aa925c1666a5-budget-bound
+
+CELL 11 OUTPUT 47
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 48
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 49
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 50
+<IPython.core.display.Image object>
+CELL 11 OUTPUT 51
+<IPython.core.display.Image object>
